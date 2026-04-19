@@ -1,0 +1,25 @@
+{
+  "name": "Home | Finanzas en pareja",
+  "short_name": "Home",
+  "description": "App movil para finanzas reales en pareja con cuentas, efectivo, autenticacion y presupuesto mensual.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#fff6fb",
+  "theme_color": "#fdf5fb",
+  "lang": "es",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
