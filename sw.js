@@ -1,9 +1,9 @@
-const CACHE_NAME = "nido-cache-v2";
+const CACHE_NAME = "home-cache-v6";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
-  "./app.js",
+  "./app.js?v=20260419-4",
   "./manifest.webmanifest",
   "./assets/icon.svg",
   "./assets/maskable.svg"
@@ -41,16 +41,23 @@ self.addEventListener("fetch", (event) => {
   }
 
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) {
-        return cached;
-      }
-
-      return fetch(request).then((networkResponse) => {
+    fetch(request)
+      .then((networkResponse) => {
         const clone = networkResponse.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
         return networkResponse;
-      }).catch(() => caches.match("./index.html"));
-    })
+      })
+      .catch(async () => {
+        const cached = await caches.match(request);
+        if (cached) {
+          return cached;
+        }
+
+        if (request.mode === "navigate") {
+          return caches.match("./index.html");
+        }
+
+        return caches.match("./");
+      })
   );
 });

@@ -1,0 +1,73 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "accounts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "householdId", "order": "ASCENDING" },
+        { "fieldPath": "ownerUserId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "memberships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "householdId", "order": "ASCENDING" },
+        { "fieldPath": "joinedAt",    "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "passwordResets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "userId",    "order": "ASCENDING"  },
+        { "fieldPath": "usedAt",    "order": "ASCENDING"  },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "planItems",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "householdId", "order": "ASCENDING" },
+        { "fieldPath": "monthKey",    "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "planItems",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "householdId", "order": "ASCENDING" },
+        { "fieldPath": "monthKey",    "order": "ASCENDING" },
+        { "fieldPath": "ownerUserId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "planTemplates",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "householdId", "order": "ASCENDING" },
+        { "fieldPath": "active",      "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "transactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "householdId", "order": "ASCENDING"  },
+        { "fieldPath": "monthKey",    "order": "ASCENDING"  },
+        { "fieldPath": "occurredOn",  "order": "DESCENDING" },
+        { "fieldPath": "createdAt",   "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "transactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "householdId", "order": "ASCENDING" },
+        { "fieldPath": "monthKey",    "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
