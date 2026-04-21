@@ -1,38 +1,76 @@
-const http = require("node:http");
-const fs = require("node:fs");
-const path = require("node:path");
-const os = require("node:os");
-const crypto = require("node:crypto");
-const { DatabaseSync } = require("node:sqlite");
+/**
+ * Home – Finanzas en pareja
+ * Backend basado en Firebase Admin SDK + Firestore.
+ * La API HTTP mantiene el contrato esperado por el frontend.
+ *
+ * Variables de entorno requeridas (ver .env.example):
+ *   FIREBASE_SERVICE_ACCOUNT  JSON completo de la cuenta de servicio (recomendado)
+ *   — o bien —
+ *   GOOGLE_APPLICATION_CREDENTIALS  Ruta al archivo JSON de la cuenta de servicio
+ *
+ * Variables opcionales:
+ *   PORT          Puerto HTTP (por defecto 4173)
+ *   NODE_ENV      "production" para ocultar el código de recuperación en pantalla
+ */
 
-const PORT = Number(process.env.PORT || 4173);
-const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, "data");
-const DB_PATH = process.env.HOME_DB_PATH || path.join(DATA_DIR, "home.sqlite");
-const SESSION_DAYS = 30;
-const RESET_CODE_MINUTES = 15;
-const MAX_AVATAR_DATA_URL_LENGTH = 450_000;
-const ACCOUNT_COLORS = ["Lavanda", "Lila", "Rosa", "Durazno", "Menta", "Cielo"];
+"use strict";
+
+const http    = require("node:http");
+const fs      = require("node:fs");
+const path    = require("node:path");
+const os      = require("node:os");
+const crypto  = require("node:crypto");
+const admin   = require("firebase-admin");
+const ROOT    = __dirname;
+
+loadEnvFile(path.join(ROOT, ".env"));
+
+// ─── Firebase ─────────────────────────────────────────────────────────────────
+
+(function initFirebase() {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    } catch {
+      throw new Error("FIREBASE_SERVICE_ACCOUNT no contiene un JSON valido.");
+    }
+
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+  } else {
+    // Usa GOOGLE_APPLICATION_CREDENTIALS si está configurada
+    admin.initializeApp();
+  }
+})();
+
+const db         = admin.firestore();
+const FieldValue = admin.firestore.FieldValue;
+
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+const PORT                    = Number(process.env.PORT || 4173);
+const SESSION_DAYS            = 30;
+const RESET_CODE_MINUTES      = 15;
+const MAX_AVATAR_DATA_URL_LEN = 450_000;
+const ACCOUNT_COLORS          = ["Lavanda", "Lila", "Rosa", "Durazno", "Menta", "Cielo"];
 const MIME_TYPES = {
-  ".css": "text/css; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml; charset=utf-8",
+  ".css":         "text/css; charset=utf-8",
+  ".html":        "text/html; charset=utf-8",
+  ".js":          "text/javascript; charset=utf-8",
+  ".json":        "application/json; charset=utf-8",
+  ".svg":         "image/svg+xml; charset=utf-8",
   ".webmanifest": "application/manifest+json; charset=utf-8"
 };
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+// ─── Servidor HTTP ─────────────────────────────────────────────────────────────
 
-const db = new DatabaseSync(DB_PATH);
-initializeDatabase();
-cleanupExpiredSessions();
-
-const server = http.createServer((request, response) => {
-  handleRequest(request, response).catch((error) => {
-    console.error(error);
-    respondJson(response, error.status || 500, {
-      error: error.status ? error.message : "Error interno del servidor."
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch((err) => {
+    console.error("[error]", err);
+    respondJson(res, err.status || 500, {
+      error: err.status ? err.message : "Error interno del servidor."
     });
   });
 });
@@ -40,782 +78,714 @@ const server = http.createServer((request, response) => {
 server.listen(PORT, "0.0.0.0", () => {
   const urls = [`http://localhost:${PORT}`, ...getNetworkUrls(PORT)];
   console.log("Home listo en:");
-  urls.forEach((url) => console.log(`- ${url}`));
+  urls.forEach((u) => console.log(`  ${u}`));
 });
 
-async function handleRequest(request, response) {
-  const url = new URL(request.url, `http://${request.headers.host}`);
+// ─── Routing ──────────────────────────────────────────────────────────────────
 
+async function handleRequest(req, res) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname.startsWith("/api/")) {
-    await handleApi(request, response, url);
-    return;
+    await handleApi(req, res, url);
+  } else {
+    serveStatic(res, url.pathname);
   }
-
-  serveStatic(response, url.pathname);
 }
 
-async function handleApi(request, response, url) {
+async function handleApi(req, res, url) {
   try {
-    const route = `${request.method} ${url.pathname}`;
+    const route = `${req.method} ${url.pathname}`;
 
     if (route === "POST /api/auth/register") {
-      await registerUser(request, response);
-      return;
+      await registerUser(req, res); return;
     }
-
     if (route === "POST /api/auth/login") {
-      await loginUser(request, response);
-      return;
+      await loginUser(req, res); return;
     }
-
     if (route === "POST /api/auth/request-reset") {
-      await requestPasswordReset(request, response);
-      return;
+      await requestPasswordReset(req, res); return;
     }
-
     if (route === "POST /api/auth/reset-password") {
-      await resetPassword(request, response);
-      return;
+      await resetPassword(req, res); return;
     }
-
     if (route === "POST /api/auth/logout") {
-      logoutUser(request, response);
-      return;
+      await logoutUser(req, res); return;
     }
-
     if (route === "GET /api/bootstrap") {
-      const auth = requireAuth(request);
+      const auth     = await requireAuth(req);
       const monthKey = parseMonthKey(url.searchParams.get("month") || currentMonthKey());
-      ensurePlanItemsForMonth(auth.household.id, monthKey);
-      respondJson(response, 200, buildBootstrap(auth, monthKey));
+      await ensurePlanItemsForMonth(auth.household.id, monthKey);
+      respondJson(res, 200, await buildBootstrap(auth, monthKey));
       return;
     }
-
     if (route === "POST /api/accounts") {
-      const auth = requireAuth(request);
-      await createAccount(request, response, auth);
-      return;
+      const auth = await requireAuth(req);
+      await createAccount(req, res, auth); return;
     }
-
+    if (route === "POST /api/accounts/clear") {
+      const auth = await requireAuth(req);
+      await clearAccounts(req, res, auth); return;
+    }
     if (route === "POST /api/plan-items") {
-      const auth = requireAuth(request);
-      await createPlanItem(request, response, auth);
-      return;
+      const auth = await requireAuth(req);
+      await createPlanItem(req, res, auth); return;
     }
-
     if (route === "POST /api/transactions") {
-      const auth = requireAuth(request);
-      await createTransaction(request, response, auth);
-      return;
+      const auth = await requireAuth(req);
+      await createTransaction(req, res, auth); return;
     }
-
+    if (route === "POST /api/transactions/update") {
+      const auth = await requireAuth(req);
+      await updateTransaction(req, res, auth); return;
+    }
+    if (route === "POST /api/transactions/delete") {
+      const auth = await requireAuth(req);
+      await deleteTransaction(req, res, auth); return;
+    }
     if (route === "POST /api/settings") {
-      const auth = requireAuth(request);
-      await saveSettings(request, response, auth);
-      return;
+      const auth = await requireAuth(req);
+      await saveSettings(req, res, auth); return;
     }
 
-    respondJson(response, 404, { error: "Ruta no encontrada." });
-  } catch (error) {
-    respondJson(response, error.status || 500, {
-      error: error.message || "Error interno."
-    });
+    respondJson(res, 404, { error: "Ruta no encontrada." });
+  } catch (err) {
+    respondJson(res, err.status || 500, { error: err.message || "Error interno." });
   }
 }
 
-function initializeDatabase() {
-  db.exec(`
-    PRAGMA foreign_keys = ON;
+// ─── Auth: Registro ───────────────────────────────────────────────────────────
 
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      password_salt TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      avatar_data_url TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS households (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'COP',
-      invite_code TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS memberships (
-      id TEXT PRIMARY KEY,
-      household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
-      user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-      role TEXT NOT NULL,
-      joined_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS password_resets (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      code_hash TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      used_at TEXT,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS accounts (
-      id TEXT PRIMARY KEY,
-      household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
-      owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL CHECK (type IN ('bank', 'cash')),
-      opening_balance INTEGER NOT NULL DEFAULT 0,
-      color_name TEXT NOT NULL DEFAULT 'Lavanda',
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS plan_templates (
-      id TEXT PRIMARY KEY,
-      household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
-      owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
-      title TEXT NOT NULL,
-      category TEXT NOT NULL,
-      amount INTEGER NOT NULL,
-      due_day INTEGER NOT NULL,
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS plan_items (
-      id TEXT PRIMARY KEY,
-      household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
-      owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-      template_id TEXT REFERENCES plan_templates(id) ON DELETE SET NULL,
-      kind TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
-      title TEXT NOT NULL,
-      category TEXT NOT NULL,
-      amount INTEGER NOT NULL,
-      due_day INTEGER NOT NULL,
-      month_key TEXT NOT NULL,
-      completed_transaction_id TEXT,
-      completed_at TEXT,
-      created_at TEXT NOT NULL,
-      UNIQUE(template_id, month_key)
-    );
-
-    CREATE TABLE IF NOT EXISTS transactions (
-      id TEXT PRIMARY KEY,
-      household_id TEXT NOT NULL REFERENCES households(id) ON DELETE CASCADE,
-      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-      actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      plan_item_id TEXT,
-      kind TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
-      category TEXT NOT NULL,
-      amount INTEGER NOT NULL,
-      note TEXT NOT NULL DEFAULT '',
-      occurred_on TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
-    CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id, expires_at);
-    CREATE INDEX IF NOT EXISTS idx_accounts_household ON accounts(household_id);
-    CREATE INDEX IF NOT EXISTS idx_plan_items_month ON plan_items(household_id, month_key);
-    CREATE INDEX IF NOT EXISTS idx_transactions_month ON transactions(household_id, occurred_on);
-  `);
-
-  ensureColumn("users", "avatar_data_url TEXT NOT NULL DEFAULT ''");
-}
-
-async function registerUser(request, response) {
-  const body = await readJsonBody(request);
-  const name = requireText(body.name, 2, 48, "Nombre invalido.");
-  const email = normalizeEmail(body.email);
-  const password = requirePassword(body.password);
-  const inviteCode = optionalText(body.inviteCode, 0, 12).toUpperCase();
+async function registerUser(req, res) {
+  const body          = await readJsonBody(req);
+  const name          = requireText(body.name, 2, 48, "Nombre invalido.");
+  const email         = normalizeEmail(body.email);
+  const password      = requirePassword(body.password);
+  const inviteCode    = optionalText(body.inviteCode, 0, 12).toUpperCase();
   const avatarDataUrl = sanitizeAvatarDataUrl(body.avatarDataUrl);
 
-  const existingUser = db.prepare(`
-    SELECT id
-    FROM users
-    WHERE email = :email
-  `).get({ email });
-
-  if (existingUser) {
+  // Verificar que el email no exista ya
+  const existingSnap = await db.collection("users").where("email", "==", email).limit(1).get();
+  if (!existingSnap.empty) {
     throw createHttpError(409, "Ese email ya esta registrado.");
   }
 
-  const userId = crypto.randomUUID();
-  const createdAt = nowIso();
-  const passwordRecord = createPasswordRecord(password);
-  let household = null;
+  let householdId;
+  let householdPayload;
 
-  runInTransaction(() => {
-    if (inviteCode) {
-      household = db.prepare(`
-        SELECT id, name, currency, invite_code AS inviteCode
-        FROM households
-        WHERE invite_code = :inviteCode
-      `).get({ inviteCode });
+  if (inviteCode) {
+    const hSnap = await db.collection("households").where("inviteCode", "==", inviteCode).limit(1).get();
+    if (hSnap.empty) throw createHttpError(400, "Ese codigo de invitacion no existe.");
 
-      if (!household) {
-        throw createHttpError(400, "Ese codigo de invitacion no existe.");
-      }
+    const hDoc = hSnap.docs[0];
+    householdId = hDoc.id;
+    householdPayload = null; // ya existe, no se crea
 
-      const memberCount = db.prepare(`
-        SELECT COUNT(*) AS total
-        FROM memberships
-        WHERE household_id = :householdId
-      `).get({ householdId: household.id }).total;
-
-      if (memberCount >= 2) {
-        throw createHttpError(400, "Ese entorno compartido ya tiene dos personas.");
-      }
-    } else {
-      household = {
-        id: crypto.randomUUID(),
-        name: "Home",
-        currency: "COP",
-        inviteCode: createInviteCodeUnique()
-      };
-
-      db.prepare(`
-        INSERT INTO households (id, name, currency, invite_code, created_at)
-        VALUES (:id, :name, :currency, :inviteCode, :createdAt)
-      `).run({
-        id: household.id,
-        name: household.name,
-        currency: household.currency,
-        inviteCode: household.inviteCode,
-        createdAt
-      });
+    const membersSnap = await db.collection("memberships").where("householdId", "==", householdId).get();
+    if (membersSnap.size >= 2) {
+      throw createHttpError(400, "Ese entorno compartido ya tiene dos personas.");
     }
+  } else {
+    householdId = crypto.randomUUID();
+    householdPayload = {
+      name:       "Home",
+      currency:   "COP",
+      inviteCode: await createInviteCodeUnique(),
+      createdAt:  nowIso()
+    };
+  }
 
-    db.prepare(`
-      INSERT INTO users (id, name, email, password_salt, password_hash, avatar_data_url, created_at)
-      VALUES (:id, :name, :email, :salt, :hash, :avatarDataUrl, :createdAt)
-    `).run({
-      id: userId,
-      name,
-      email,
-      salt: passwordRecord.salt,
-      hash: passwordRecord.hash,
-      avatarDataUrl,
-      createdAt
-    });
+  const userId          = crypto.randomUUID();
+  const createdAt       = nowIso();
+  const passwordRecord  = createPasswordRecord(password);
+  const batch           = db.batch();
 
-    db.prepare(`
-      INSERT INTO memberships (id, household_id, user_id, role, joined_at)
-      VALUES (:id, :householdId, :userId, :role, :joinedAt)
-    `).run({
-      id: crypto.randomUUID(),
-      householdId: household.id,
-      userId,
-      role: inviteCode ? "partner" : "owner",
-      joinedAt: createdAt
-    });
+  if (householdPayload) {
+    batch.set(db.collection("households").doc(householdId), householdPayload);
+  }
+
+  batch.set(db.collection("users").doc(userId), {
+    name,
+    email,
+    passwordSalt:   passwordRecord.salt,
+    passwordHash:   passwordRecord.hash,
+    avatarDataUrl,
+    createdAt
   });
 
-  createSession(response, userId);
-  respondJson(response, 201, { ok: true });
+  batch.set(db.collection("memberships").doc(crypto.randomUUID()), {
+    householdId,
+    userId,
+    role:     inviteCode ? "partner" : "owner",
+    joinedAt: createdAt
+  });
+
+  await batch.commit();
+  await createSession(res, userId);
+  respondJson(res, 201, { ok: true });
 }
 
-async function loginUser(request, response) {
-  const body = await readJsonBody(request);
-  const email = normalizeEmail(body.email);
+// ─── Auth: Login ──────────────────────────────────────────────────────────────
+
+async function loginUser(req, res) {
+  const body     = await readJsonBody(req);
+  const email    = normalizeEmail(body.email);
   const password = requirePassword(body.password, true);
 
-  const user = db.prepare(`
-    SELECT id, password_salt AS salt, password_hash AS hash
-    FROM users
-    WHERE email = :email
-  `).get({ email });
+  const snap = await db.collection("users").where("email", "==", email).limit(1).get();
+  if (snap.empty) throw createHttpError(401, "Email o contrasena incorrectos.");
 
-  if (!user || !verifyPassword(password, user.salt, user.hash)) {
+  const userDoc  = snap.docs[0];
+  const userData = userDoc.data();
+
+  if (!verifyPassword(password, userData.passwordSalt, userData.passwordHash)) {
     throw createHttpError(401, "Email o contrasena incorrectos.");
   }
 
-  createSession(response, user.id);
-  respondJson(response, 200, { ok: true });
+  await createSession(res, userDoc.id);
+  respondJson(res, 200, { ok: true });
 }
 
-async function requestPasswordReset(request, response) {
-  const body = await readJsonBody(request);
+// ─── Auth: Solicitar reset ────────────────────────────────────────────────────
+
+async function requestPasswordReset(req, res) {
+  const body  = await readJsonBody(req);
   const email = normalizeEmail(body.email);
-  const user = db.prepare(`
-    SELECT id
-    FROM users
-    WHERE email = :email
-  `).get({ email });
 
   const payload = {
-    ok: true,
-    message: "Si el email existe, se genero un codigo temporal.",
+    ok:             true,
+    message:        "Si el email existe, se genero un codigo temporal.",
     expiresMinutes: RESET_CODE_MINUTES
   };
 
-  if (user) {
-    const code = randomResetCode();
+  const snap = await db.collection("users").where("email", "==", email).limit(1).get();
+
+  if (!snap.empty) {
+    const userId    = snap.docs[0].id;
+    const code      = randomResetCode();
     const createdAt = nowIso();
     const expiresAt = new Date(Date.now() + RESET_CODE_MINUTES * 60 * 1000).toISOString();
 
-    runInTransaction(() => {
-      db.prepare(`
-        UPDATE password_resets
-        SET used_at = :usedAt
-        WHERE user_id = :userId AND used_at IS NULL
-      `).run({
-        usedAt: createdAt,
-        userId: user.id
-      });
+    // Invalidar resets anteriores
+    const oldResets = await db.collection("passwordResets")
+      .where("userId",  "==", userId)
+      .where("usedAt",  "==", null)
+      .get();
 
-      db.prepare(`
-        INSERT INTO password_resets (id, user_id, code_hash, expires_at, created_at)
-        VALUES (:id, :userId, :codeHash, :expiresAt, :createdAt)
-      `).run({
-        id: crypto.randomUUID(),
-        userId: user.id,
-        codeHash: hashCode(code),
-        expiresAt,
-        createdAt
-      });
+    const batch = db.batch();
+    oldResets.docs.forEach((doc) => batch.update(doc.ref, { usedAt: createdAt }));
+    batch.set(db.collection("passwordResets").doc(crypto.randomUUID()), {
+      userId,
+      codeHash:  hashCode(code),
+      expiresAt,
+      usedAt:    null,
+      createdAt
     });
+    await batch.commit();
 
     if (process.env.NODE_ENV !== "production") {
       payload.previewCode = code;
     }
   }
 
-  respondJson(response, 200, payload);
+  respondJson(res, 200, payload);
 }
 
-async function resetPassword(request, response) {
-  const body = await readJsonBody(request);
-  const email = normalizeEmail(body.email);
-  const code = requireText(body.code, 4, 12, "Codigo invalido.");
+// ─── Auth: Reset de contraseña ────────────────────────────────────────────────
+
+async function resetPassword(req, res) {
+  const body        = await readJsonBody(req);
+  const email       = normalizeEmail(body.email);
+  const code        = requireText(body.code, 4, 12, "Codigo invalido.");
   const newPassword = requirePassword(body.newPassword);
 
-  const user = db.prepare(`
-    SELECT id
-    FROM users
-    WHERE email = :email
-  `).get({ email });
+  const userSnap = await db.collection("users").where("email", "==", email).limit(1).get();
+  if (userSnap.empty) throw createHttpError(400, "No se pudo validar la recuperacion.");
 
-  if (!user) {
-    throw createHttpError(400, "No se pudo validar la recuperacion.");
-  }
+  const userDoc = userSnap.docs[0];
+  const userId  = userDoc.id;
 
-  const reset = db.prepare(`
-    SELECT id, code_hash AS codeHash, expires_at AS expiresAt
-    FROM password_resets
-    WHERE user_id = :userId AND used_at IS NULL
-    ORDER BY created_at DESC
-    LIMIT 1
-  `).get({ userId: user.id });
+  const resetSnap = await db.collection("passwordResets")
+    .where("userId", "==", userId)
+    .where("usedAt", "==", null)
+    .orderBy("createdAt", "desc")
+    .limit(1)
+    .get();
 
-  if (!reset || reset.expiresAt <= nowIso() || reset.codeHash !== hashCode(code)) {
+  if (resetSnap.empty) throw createHttpError(400, "Codigo vencido o incorrecto.");
+
+  const resetDoc  = resetSnap.docs[0];
+  const resetData = resetDoc.data();
+
+  if (resetData.expiresAt <= nowIso() || resetData.codeHash !== hashCode(code)) {
     throw createHttpError(400, "Codigo vencido o incorrecto.");
   }
 
-  const passwordRecord = createPasswordRecord(newPassword);
+  const pr     = createPasswordRecord(newPassword);
   const usedAt = nowIso();
 
-  runInTransaction(() => {
-    db.prepare(`
-      UPDATE users
-      SET password_salt = :salt, password_hash = :hash
-      WHERE id = :userId
-    `).run({
-      salt: passwordRecord.salt,
-      hash: passwordRecord.hash,
-      userId: user.id
-    });
+  // Eliminar todas las sesiones activas del usuario
+  const sessionsSnap = await db.collection("sessions").where("userId", "==", userId).get();
 
-    db.prepare(`
-      UPDATE password_resets
-      SET used_at = :usedAt
-      WHERE user_id = :userId AND used_at IS NULL
-    `).run({
-      usedAt,
-      userId: user.id
-    });
+  const batch = db.batch();
+  batch.update(userDoc.ref, { passwordSalt: pr.salt, passwordHash: pr.hash });
+  batch.update(resetDoc.ref, { usedAt });
+  sessionsSnap.docs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
 
-    db.prepare(`
-      DELETE FROM sessions
-      WHERE user_id = :userId
-    `).run({ userId: user.id });
-  });
-
-  createSession(response, user.id);
-  respondJson(response, 200, { ok: true });
+  await createSession(res, userId);
+  respondJson(res, 200, { ok: true });
 }
 
-function logoutUser(request, response) {
-  const cookies = parseCookies(request.headers.cookie || "");
+// ─── Auth: Logout ─────────────────────────────────────────────────────────────
+
+async function logoutUser(req, res) {
+  const cookies = parseCookies(req.headers.cookie || "");
   if (cookies.sid) {
-    db.prepare(`
-      DELETE FROM sessions
-      WHERE id = :id
-    `).run({ id: cookies.sid });
+    await db.collection("sessions").doc(cookies.sid).delete();
   }
-
-  respondJson(response, 200, { ok: true }, {
-    "Set-Cookie": expiredCookie()
-  });
+  respondJson(res, 200, { ok: true }, { "Set-Cookie": expiredCookie() });
 }
 
-async function createAccount(request, response, auth) {
-  const body = await readJsonBody(request);
-  const name = requireText(body.name, 2, 40, "Nombre de cuenta invalido.");
-  const type = requireOneOf(body.type, ["bank", "cash"], "Tipo de cuenta invalido.");
-  const scope = requireOneOf(body.scope, ["personal", "shared"], "Espacio invalido.");
+// ─── Cuentas ──────────────────────────────────────────────────────────────────
+
+async function createAccount(req, res, auth) {
+  const body           = await readJsonBody(req);
+  const name           = requireText(body.name, 2, 40, "Nombre de cuenta invalido.");
+  const type           = requireOneOf(body.type, ["bank", "cash"], "Tipo de cuenta invalido.");
+  const scope          = requireOneOf(body.scope, ["personal", "shared"], "Espacio invalido.");
   const openingBalance = requireMoney(body.openingBalance, "Saldo inicial invalido.");
 
-  db.prepare(`
-    INSERT INTO accounts (id, household_id, owner_user_id, name, type, opening_balance, color_name, created_at)
-    VALUES (:id, :householdId, :ownerUserId, :name, :type, :openingBalance, :colorName, :createdAt)
-  `).run({
-    id: crypto.randomUUID(),
-    householdId: auth.household.id,
-    ownerUserId: scope === "shared" ? null : auth.user.id,
+  await db.collection("accounts").doc(crypto.randomUUID()).set({
+    householdId:    auth.household.id,
+    ownerUserId:    scope === "shared" ? null : auth.user.id,
     name,
     type,
     openingBalance,
-    colorName: pickColorName(name),
-    createdAt: nowIso()
+    currentBalance: openingBalance,   // saldo actualizado con cada transacción
+    colorName:      pickColorName(name),
+    createdAt:      nowIso()
   });
 
-  respondJson(response, 201, { ok: true });
+  respondJson(res, 201, { ok: true });
 }
 
-async function createPlanItem(request, response, auth) {
-  const body = await readJsonBody(request);
-  const monthKey = parseMonthKey(body.monthKey || currentMonthKey());
-  const kind = requireOneOf(body.kind, ["income", "expense"], "Tipo invalido.");
-  const title = requireText(body.title, 2, 48, "Nombre invalido.");
-  const category = requireText(body.category, 2, 40, "Categoria invalida.");
-  const amount = requireMoney(body.amount, "Valor invalido.");
-  const dueDay = requireDay(body.dueDay);
-  const scope = requireOneOf(body.scope, ["personal", "shared"], "Espacio invalido.");
+async function clearAccounts(req, res, auth) {
+  const [accountsSnap, transactionsSnap, planItemsSnap] = await Promise.all([
+    db.collection("accounts").where("householdId", "==", auth.household.id).get(),
+    db.collection("transactions").where("householdId", "==", auth.household.id).get(),
+    db.collection("planItems").where("householdId", "==", auth.household.id).get()
+  ]);
+
+  const accountIds = new Set(accountsSnap.docs.map((doc) => doc.id));
+  const transactionDocs = transactionsSnap.docs.filter((doc) => accountIds.has(doc.data().accountId));
+  const transactionIds = new Set(transactionDocs.map((doc) => doc.id));
+  const planDocsToReset = planItemsSnap.docs.filter((doc) => {
+    const completedTransactionId = doc.data().completedTransactionId;
+    return completedTransactionId && transactionIds.has(completedTransactionId);
+  });
+
+  await commitBatchOperations([
+    ...planDocsToReset.map((doc) => ({
+      type: "update",
+      ref: doc.ref,
+      data: {
+        completedTransactionId: null,
+        completedAt: null
+      }
+    })),
+    ...transactionDocs.map((doc) => ({
+      type: "delete",
+      ref: doc.ref
+    })),
+    ...accountsSnap.docs.map((doc) => ({
+      type: "delete",
+      ref: doc.ref
+    }))
+  ]);
+
+  respondJson(res, 200, {
+    ok: true,
+    deletedAccounts: accountsSnap.size,
+    deletedTransactions: transactionDocs.length
+  });
+}
+
+// ─── Ítems del Plan ───────────────────────────────────────────────────────────
+
+async function createPlanItem(req, res, auth) {
+  const body          = await readJsonBody(req);
+  const monthKey      = parseMonthKey(body.monthKey || currentMonthKey());
+  const kind          = requireOneOf(body.kind, ["income", "expense"], "Tipo invalido.");
+  const title         = requireText(body.title, 2, 48, "Nombre invalido.");
+  const category      = requireText(body.category, 2, 40, "Categoria invalida.");
+  const amount        = requireMoney(body.amount, "Valor invalido.");
+  const dueDay        = requireDay(body.dueDay);
+  const scope         = requireOneOf(body.scope, ["personal", "shared"], "Espacio invalido.");
   const repeatMonthly = Boolean(body.repeatMonthly);
 
-  runInTransaction(() => {
-    let templateId = null;
-    const createdAt = nowIso();
+  const ownerUserId = scope === "shared" ? null : auth.user.id;
+  const createdAt   = nowIso();
+  const batch       = db.batch();
 
-    if (repeatMonthly) {
-      templateId = crypto.randomUUID();
-      db.prepare(`
-        INSERT INTO plan_templates (
-          id, household_id, owner_user_id, kind, title, category, amount, due_day, active, created_at
-        )
-        VALUES (
-          :id, :householdId, :ownerUserId, :kind, :title, :category, :amount, :dueDay, 1, :createdAt
-        )
-      `).run({
-        id: templateId,
-        householdId: auth.household.id,
-        ownerUserId: scope === "shared" ? null : auth.user.id,
-        kind,
-        title,
-        category,
-        amount,
-        dueDay,
-        createdAt
-      });
-    }
-
-    db.prepare(`
-      INSERT INTO plan_items (
-        id, household_id, owner_user_id, template_id, kind, title, category, amount, due_day, month_key, created_at
-      )
-      VALUES (
-        :id, :householdId, :ownerUserId, :templateId, :kind, :title, :category, :amount, :dueDay, :monthKey, :createdAt
-      )
-    `).run({
-      id: crypto.randomUUID(),
+  let templateId = null;
+  if (repeatMonthly) {
+    templateId = crypto.randomUUID();
+    batch.set(db.collection("planTemplates").doc(templateId), {
       householdId: auth.household.id,
-      ownerUserId: scope === "shared" ? null : auth.user.id,
-      templateId,
-      kind,
-      title,
-      category,
-      amount,
-      dueDay,
-      monthKey,
+      ownerUserId,
+      kind, title, category, amount, dueDay,
+      active: true,
       createdAt
     });
-  });
-
-  respondJson(response, 201, { ok: true });
-}
-
-async function createTransaction(request, response, auth) {
-  const body = await readJsonBody(request);
-  const kind = requireOneOf(body.kind, ["income", "expense"], "Tipo invalido.");
-  const accountId = requireText(body.accountId, 1, 64, "Cuenta invalida.");
-  const category = requireText(body.category, 2, 40, "Categoria invalida.");
-  const amount = requireMoney(body.amount, "Valor invalido.");
-  const occurredOn = requireDate(body.occurredOn, "Fecha invalida.");
-  const note = optionalText(body.note, 0, 140);
-  const planItemId = optionalText(body.planItemId, 0, 64);
-
-  const account = getVisibleAccount(auth, accountId);
-  if (!account) {
-    throw createHttpError(404, "No puedes usar esa cuenta.");
   }
 
-  runInTransaction(() => {
+  batch.set(db.collection("planItems").doc(crypto.randomUUID()), {
+    householdId:             auth.household.id,
+    ownerUserId,
+    templateId,
+    kind, title, category, amount, dueDay, monthKey,
+    completedTransactionId:  null,
+    completedAt:             null,
+    createdAt
+  });
+
+  await batch.commit();
+  respondJson(res, 201, { ok: true });
+}
+
+// ─── Transacciones ────────────────────────────────────────────────────────────
+
+async function createTransaction(req, res, auth) {
+  const body       = await readJsonBody(req);
+  const kind       = requireOneOf(body.kind, ["income", "expense"], "Tipo invalido.");
+  const accountId  = requireText(body.accountId, 1, 64, "Cuenta invalida.");
+  const category   = requireText(body.category, 2, 40, "Categoria invalida.");
+  const amount     = requireMoney(body.amount, "Valor invalido.");
+  const occurredOn = requireDate(body.occurredOn, "Fecha invalida.");
+  const note       = optionalText(body.note, 0, 140);
+  const planItemId = optionalText(body.planItemId, 0, 64);
+  const monthKey   = occurredOn.slice(0, 7);
+
+  await db.runTransaction(async (txn) => {
+    // Validar cuenta
+    const accountDoc = await txn.get(db.collection("accounts").doc(accountId));
+    if (!accountDoc.exists) throw createHttpError(404, "No puedes usar esa cuenta.");
+    const acct = accountDoc.data();
+    if (acct.householdId !== auth.household.id)                                throw createHttpError(404, "No puedes usar esa cuenta.");
+    if (acct.ownerUserId !== null && acct.ownerUserId !== auth.user.id)        throw createHttpError(404, "No puedes usar esa cuenta.");
+
+    // Validar ítem del plan (opcional)
+    let planDoc = null;
     if (planItemId) {
-      const planItem = getVisiblePlanItem(auth, planItemId);
-      if (!planItem) {
-        throw createHttpError(404, "Ese item del plan no existe.");
-      }
-
-      if (planItem.kind !== kind) {
-        throw createHttpError(400, "El item del plan no coincide con el tipo de movimiento.");
-      }
-
-      if (planItem.completedTransactionId) {
-        throw createHttpError(400, "Ese item del plan ya fue marcado.");
-      }
-
-      if (planItem.monthKey !== occurredOn.slice(0, 7)) {
-        throw createHttpError(400, "La fecha debe pertenecer al mismo mes del item.");
-      }
-
-      if ((!planItem.ownerUserId) !== (!account.ownerUserId)) {
-        throw createHttpError(400, "El item del plan y la cuenta deben estar en el mismo espacio.");
-      }
+      planDoc = await txn.get(db.collection("planItems").doc(planItemId));
+      if (!planDoc.exists) throw createHttpError(404, "Ese item del plan no existe.");
+      const item = planDoc.data();
+      if (item.householdId !== auth.household.id)                              throw createHttpError(404, "Ese item del plan no existe.");
+      if (item.ownerUserId !== null && item.ownerUserId !== auth.user.id)      throw createHttpError(404, "Ese item del plan no existe.");
+      if (item.kind !== kind)                                                  throw createHttpError(400, "El item del plan no coincide con el tipo de movimiento.");
+      if (item.completedTransactionId)                                         throw createHttpError(400, "Ese item del plan ya fue marcado.");
+      if (item.monthKey !== monthKey)                                          throw createHttpError(400, "La fecha debe pertenecer al mismo mes del item.");
+      const planShared = item.ownerUserId === null;
+      const acctShared = acct.ownerUserId  === null;
+      if (planShared !== acctShared)                                           throw createHttpError(400, "El item del plan y la cuenta deben estar en el mismo espacio.");
     }
 
     const transactionId = crypto.randomUUID();
-    const createdAt = nowIso();
+    const createdAt     = nowIso();
 
-    db.prepare(`
-      INSERT INTO transactions (
-        id, household_id, account_id, actor_user_id, plan_item_id, kind, category, amount, note, occurred_on, created_at
-      )
-      VALUES (
-        :id, :householdId, :accountId, :actorUserId, :planItemId, :kind, :category, :amount, :note, :occurredOn, :createdAt
-      )
-    `).run({
-      id: transactionId,
-      householdId: auth.household.id,
-      accountId: account.id,
-      actorUserId: auth.user.id,
+    // Escribir transacción
+    txn.set(db.collection("transactions").doc(transactionId), {
+      householdId:  auth.household.id,
+      accountId,
+      actorUserId:  auth.user.id,
+      planItemId:   planItemId || null,
+      kind, category, amount, note, occurredOn, monthKey,
+      createdAt
+    });
+
+    // Actualizar saldo de la cuenta atómicamente
+    const delta = kind === "income" ? amount : -amount;
+    txn.update(accountDoc.ref, { currentBalance: FieldValue.increment(delta) });
+
+    // Marcar ítem del plan como completado
+    if (planItemId && planDoc) {
+      txn.update(planDoc.ref, {
+        completedTransactionId: transactionId,
+        completedAt:            occurredOn
+      });
+    }
+  });
+
+  respondJson(res, 201, { ok: true });
+}
+
+async function updateTransaction(req, res, auth) {
+  const body          = await readJsonBody(req);
+  const transactionId = requireText(body.transactionId, 1, 64, "Movimiento invalido.");
+  const kind          = requireOneOf(body.kind, ["income", "expense"], "Tipo invalido.");
+  const accountId     = requireText(body.accountId, 1, 64, "Cuenta invalida.");
+  const category      = requireText(body.category, 2, 40, "Categoria invalida.");
+  const amount        = requireMoney(body.amount, "Valor invalido.");
+  const occurredOn    = requireDate(body.occurredOn, "Fecha invalida.");
+  const note          = optionalText(body.note, 0, 140);
+  const planItemId    = optionalText(body.planItemId, 0, 64);
+  const monthKey      = occurredOn.slice(0, 7);
+
+  await db.runTransaction(async (txn) => {
+    const currentContext = await getTransactionEditContext(txn, auth, transactionId);
+    const currentDelta = movementDelta(currentContext.transaction.kind, currentContext.transaction.amount);
+    const nextDelta = movementDelta(kind, amount);
+
+    const nextAccountContext = accountId === currentContext.transaction.accountId
+      ? currentContext.accountContext
+      : await getVisibleAccountContext(txn, auth, accountId);
+
+    let nextPlanContext = null;
+    if (planItemId) {
+      nextPlanContext = await getVisiblePlanItemContext(txn, auth, planItemId);
+      validatePlanItemForTransaction(
+        nextPlanContext.data,
+        auth,
+        kind,
+        monthKey,
+        getAccountScope(nextAccountContext.data),
+        transactionId
+      );
+    }
+
+    if (currentContext.transaction.accountId === accountId) {
+      const adjustment = nextDelta - currentDelta;
+      if (adjustment !== 0) {
+        txn.update(currentContext.accountContext.doc.ref, {
+          currentBalance: FieldValue.increment(adjustment)
+        });
+      }
+    } else {
+      txn.update(currentContext.accountContext.doc.ref, {
+        currentBalance: FieldValue.increment(-currentDelta)
+      });
+      txn.update(nextAccountContext.doc.ref, {
+        currentBalance: FieldValue.increment(nextDelta)
+      });
+    }
+
+    if (
+      currentContext.planItemContext &&
+      currentContext.transaction.planItemId !== planItemId &&
+      currentContext.planItemContext.data.completedTransactionId === transactionId
+    ) {
+      txn.update(currentContext.planItemContext.doc.ref, {
+        completedTransactionId: null,
+        completedAt: null
+      });
+    }
+
+    if (nextPlanContext) {
+      txn.update(nextPlanContext.doc.ref, {
+        completedTransactionId: transactionId,
+        completedAt: occurredOn
+      });
+    }
+
+    txn.update(currentContext.transactionDoc.ref, {
+      accountId,
       planItemId: planItemId || null,
       kind,
       category,
       amount,
       note,
       occurredOn,
-      createdAt
+      monthKey,
+      updatedAt: nowIso(),
+      updatedByUserId: auth.user.id
     });
-
-    if (planItemId) {
-      db.prepare(`
-        UPDATE plan_items
-        SET completed_transaction_id = :transactionId, completed_at = :completedAt
-        WHERE id = :planItemId
-      `).run({
-        transactionId,
-        completedAt: occurredOn,
-        planItemId
-      });
-    }
   });
 
-  respondJson(response, 201, { ok: true });
+  respondJson(res, 200, { ok: true });
 }
 
-async function saveSettings(request, response, auth) {
-  const body = await readJsonBody(request);
-  const name = requireText(body.name, 2, 48, "Nombre invalido.");
-  const currency = requireOneOf(body.currency, ["COP", "USD", "EUR", "MXN"], "Moneda invalida.");
+async function deleteTransaction(req, res, auth) {
+  const body = await readJsonBody(req);
+  const transactionId = requireText(body.transactionId, 1, 64, "Movimiento invalido.");
+
+  await db.runTransaction(async (txn) => {
+    const currentContext = await getTransactionEditContext(txn, auth, transactionId);
+    const currentDelta = movementDelta(currentContext.transaction.kind, currentContext.transaction.amount);
+
+    txn.update(currentContext.accountContext.doc.ref, {
+      currentBalance: FieldValue.increment(-currentDelta)
+    });
+
+    if (
+      currentContext.planItemContext &&
+      currentContext.planItemContext.data.completedTransactionId === transactionId
+    ) {
+      txn.update(currentContext.planItemContext.doc.ref, {
+        completedTransactionId: null,
+        completedAt: null
+      });
+    }
+
+    txn.delete(currentContext.transactionDoc.ref);
+  });
+
+  respondJson(res, 200, { ok: true });
+}
+
+// ─── Ajustes ──────────────────────────────────────────────────────────────────
+
+async function saveSettings(req, res, auth) {
+  const body         = await readJsonBody(req);
+  const name         = requireText(body.name, 2, 48, "Nombre invalido.");
+  const currency     = requireOneOf(body.currency, ["COP", "USD", "EUR", "MXN"], "Moneda invalida.");
   const avatarDataUrl = body.avatarDataUrl === undefined
     ? undefined
     : sanitizeAvatarDataUrl(body.avatarDataUrl);
 
-  runInTransaction(() => {
-    if (avatarDataUrl === undefined) {
-      db.prepare(`
-        UPDATE users
-        SET name = :name
-        WHERE id = :userId
-      `).run({
-        name,
-        userId: auth.user.id
-      });
-    } else {
-      db.prepare(`
-        UPDATE users
-        SET name = :name, avatar_data_url = :avatarDataUrl
-        WHERE id = :userId
-      `).run({
-        name,
-        avatarDataUrl,
-        userId: auth.user.id
-      });
-    }
+  const userUpdate = { name };
+  if (avatarDataUrl !== undefined) userUpdate.avatarDataUrl = avatarDataUrl;
 
-    db.prepare(`
-      UPDATE households
-      SET currency = :currency
-      WHERE id = :householdId
-    `).run({
-      currency,
-      householdId: auth.household.id
-    });
-  });
+  const batch = db.batch();
+  batch.update(db.collection("users").doc(auth.user.id), userUpdate);
+  batch.update(db.collection("households").doc(auth.household.id), { currency });
+  await batch.commit();
 
-  respondJson(response, 200, { ok: true });
+  respondJson(res, 200, { ok: true });
 }
 
-function buildBootstrap(auth, monthKey) {
-  const accounts = db.prepare(`
-    SELECT
-      a.id,
-      a.name,
-      a.type,
-      a.owner_user_id AS ownerUserId,
-      a.opening_balance AS openingBalance,
-      a.color_name AS colorName,
-      COALESCE(SUM(
-        CASE
-          WHEN t.kind = 'income' THEN t.amount
-          WHEN t.kind = 'expense' THEN -t.amount
-          ELSE 0
-        END
-      ), 0) AS delta
-    FROM accounts a
-    LEFT JOIN transactions t ON t.account_id = a.id
-    WHERE
-      a.household_id = :householdId
-      AND (a.owner_user_id IS NULL OR a.owner_user_id = :userId)
-    GROUP BY a.id
-    ORDER BY
-      CASE WHEN a.owner_user_id IS NULL THEN 0 ELSE 1 END,
-      a.type,
-      a.created_at
-  `).all({
-    householdId: auth.household.id,
-    userId: auth.user.id
-  }).map((account) => ({
-    id: account.id,
-    name: account.name,
-    type: account.type,
-    scope: account.ownerUserId ? "personal" : "shared",
-    scopeLabel: account.ownerUserId ? "Mi espacio" : "Compartido",
-    openingBalance: account.openingBalance,
-    balance: account.openingBalance + account.delta,
-    colorName: account.colorName
-  }));
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
 
-  const transactions = db.prepare(`
-    SELECT
-      t.id,
-      t.kind,
-      t.category,
-      t.amount,
-      t.note,
-      t.occurred_on AS occurredOn,
-      t.plan_item_id AS planItemId,
-      a.name AS accountName,
-      a.type AS accountType,
-      a.owner_user_id AS accountOwnerUserId
-    FROM transactions t
-    INNER JOIN accounts a ON a.id = t.account_id
-    WHERE
-      t.household_id = :householdId
-      AND (a.owner_user_id IS NULL OR a.owner_user_id = :userId)
-      AND substr(t.occurred_on, 1, 7) = :monthKey
-    ORDER BY t.occurred_on DESC, t.created_at DESC
-    LIMIT 120
-  `).all({
-    householdId: auth.household.id,
-    userId: auth.user.id,
-    monthKey
-  }).map((transaction) => ({
-    id: transaction.id,
-    kind: transaction.kind,
-    category: transaction.category,
-    amount: transaction.amount,
-    note: transaction.note,
-    occurredOn: transaction.occurredOn,
-    accountName: transaction.accountName,
-    accountType: transaction.accountType,
-    scope: transaction.accountOwnerUserId ? "personal" : "shared",
-    scopeLabel: transaction.accountOwnerUserId ? "Mi espacio" : "Compartido",
-    planLinked: Boolean(transaction.planItemId)
-  }));
+async function buildBootstrap(auth, monthKey) {
+  // Cuentas: compartidas + personales del usuario (dos queries por limitación de Firestore)
+  const [sharedAccSnap, personalAccSnap] = await Promise.all([
+    db.collection("accounts").where("householdId", "==", auth.household.id).where("ownerUserId", "==", null).get(),
+    db.collection("accounts").where("householdId", "==", auth.household.id).where("ownerUserId", "==", auth.user.id).get()
+  ]);
 
-  const planItems = db.prepare(`
-    SELECT
-      id,
-      owner_user_id AS ownerUserId,
-      template_id AS templateId,
-      kind,
-      title,
-      category,
-      amount,
-      due_day AS dueDay,
-      month_key AS monthKey,
-      completed_transaction_id AS completedTransactionId,
-      completed_at AS completedAt
-    FROM plan_items
-    WHERE
-      household_id = :householdId
-      AND month_key = :monthKey
-      AND (owner_user_id IS NULL OR owner_user_id = :userId)
-    ORDER BY kind, due_day, title
-  `).all({
-    householdId: auth.household.id,
-    userId: auth.user.id,
-    monthKey
-  }).map((item) => ({
-    id: item.id,
-    kind: item.kind,
-    title: item.title,
-    category: item.category,
-    amount: item.amount,
-    dueDay: item.dueDay,
-    monthKey: item.monthKey,
-    completed: Boolean(item.completedTransactionId),
-    completedAt: item.completedAt,
-    scope: item.ownerUserId ? "personal" : "shared",
-    scopeLabel: item.ownerUserId ? "Mi espacio" : "Compartido",
-    isFixed: Boolean(item.templateId)
-  }));
+  const accounts = [
+    ...sharedAccSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+    ...personalAccSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  ]
+    .sort((a, b) => {
+      // Compartidas primero, luego por tipo, luego por fecha de creación
+      const sharedDiff = (a.ownerUserId === null ? 0 : 1) - (b.ownerUserId === null ? 0 : 1);
+      if (sharedDiff !== 0) return sharedDiff;
+      if (a.type !== b.type) return a.type.localeCompare(b.type);
+      return a.createdAt.localeCompare(b.createdAt);
+    })
+    .map((acc) => ({
+      id:             acc.id,
+      name:           acc.name,
+      type:           acc.type,
+      scope:          acc.ownerUserId ? "personal" : "shared",
+      scopeLabel:     acc.ownerUserId ? "Mi espacio" : "Compartido",
+      openingBalance: acc.openingBalance,
+      balance:        acc.currentBalance,
+      colorName:      acc.colorName
+    }));
 
-  const members = db.prepare(`
-    SELECT
-      users.id,
-      users.name,
-      users.email,
-      users.avatar_data_url AS avatarDataUrl
-    FROM memberships
-    INNER JOIN users ON users.id = memberships.user_id
-    WHERE memberships.household_id = :householdId
-    ORDER BY memberships.joined_at
-  `).all({ householdId: auth.household.id });
+  const visibleAccountIds = new Set(accounts.map((a) => a.id));
 
-  const summary = summarize(accounts, transactions, planItems, auth, monthKey);
+  // Transacciones del mes (filtramos en memoria por cuentas visibles)
+  const txSnap = await db.collection("transactions")
+    .where("householdId", "==", auth.household.id)
+    .where("monthKey",    "==", monthKey)
+    .orderBy("occurredOn", "desc")
+    .orderBy("createdAt",  "desc")
+    .limit(120)
+    .get();
+
+  const accountMap = new Map(accounts.map((a) => [a.id, a]));
+  const transactions = txSnap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((t) => visibleAccountIds.has(t.accountId))
+    .map((t) => {
+      const acc = accountMap.get(t.accountId);
+      return {
+        id:          t.id,
+        accountId:   t.accountId,
+        planItemId:  t.planItemId || "",
+        kind:        t.kind,
+        category:    t.category,
+        amount:      t.amount,
+        note:        t.note,
+        occurredOn:  t.occurredOn,
+        accountName: acc?.name      || "",
+        accountType: acc?.type      || "bank",
+        scope:       acc?.scope     || "shared",
+        scopeLabel:  acc?.scopeLabel || "Compartido",
+        planLinked:  Boolean(t.planItemId)
+      };
+    });
+
+  // Ítems del plan: compartidos + personales del usuario
+  const [sharedPlanSnap, personalPlanSnap] = await Promise.all([
+    db.collection("planItems")
+      .where("householdId", "==", auth.household.id)
+      .where("monthKey",    "==", monthKey)
+      .where("ownerUserId", "==", null)
+      .get(),
+    db.collection("planItems")
+      .where("householdId", "==", auth.household.id)
+      .where("monthKey",    "==", monthKey)
+      .where("ownerUserId", "==", auth.user.id)
+      .get()
+  ]);
+
+  const planItems = [
+    ...sharedPlanSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+    ...personalPlanSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  ]
+    .sort((a, b) => {
+      if (a.kind !== b.kind)       return a.kind.localeCompare(b.kind);
+      if (a.dueDay !== b.dueDay)   return a.dueDay - b.dueDay;
+      return a.title.localeCompare(b.title, "es");
+    })
+    .map((item) => ({
+      id:          item.id,
+      kind:        item.kind,
+      title:       item.title,
+      category:    item.category,
+      amount:      item.amount,
+      dueDay:      item.dueDay,
+      monthKey:    item.monthKey,
+      completed:   Boolean(item.completedTransactionId),
+      completedAt: item.completedAt,
+      scope:       item.ownerUserId ? "personal" : "shared",
+      scopeLabel:  item.ownerUserId ? "Mi espacio" : "Compartido",
+      isFixed:     Boolean(item.templateId)
+    }));
+
+  // Miembros del hogar
+  const membershipsSnap = await db.collection("memberships")
+    .where("householdId", "==", auth.household.id)
+    .orderBy("joinedAt")
+    .get();
+
+  const members = await Promise.all(
+    membershipsSnap.docs.map((m) => db.collection("users").doc(m.data().userId).get())
+  ).then((docs) =>
+    docs
+      .filter((d) => d.exists)
+      .map((d) => ({
+        id:           d.id,
+        name:         d.data().name,
+        email:        d.data().email,
+        avatarDataUrl: d.data().avatarDataUrl
+      }))
+  );
+
+  // Tendencia (últimos 6 meses)
+  const trend    = await buildTrend(auth, monthKey, visibleAccountIds);
+  const summary  = summarize(accounts, transactions, planItems, trend);
   const analytics = buildAnalytics(accounts, transactions, planItems, monthKey);
 
   return {
     user: auth.user,
     household: {
-      id: auth.household.id,
-      name: auth.household.name,
-      currency: auth.household.currency,
+      id:         auth.household.id,
+      name:       auth.household.name,
+      currency:   auth.household.currency,
       inviteCode: auth.household.inviteCode,
       members
     },
@@ -825,60 +795,145 @@ function buildBootstrap(auth, monthKey) {
     planItems,
     summary,
     analytics,
-    meta: {
-      resetPreviewMode: process.env.NODE_ENV !== "production"
-    }
+    meta: { resetPreviewMode: process.env.NODE_ENV !== "production" }
   };
 }
 
-function summarize(accounts, transactions, planItems, auth, monthKey) {
-  const availableTotal = accounts.reduce((sum, account) => sum + account.balance, 0);
-  const bankTotal = accounts.filter((account) => account.type === "bank").reduce((sum, account) => sum + account.balance, 0);
-  const cashTotal = accounts.filter((account) => account.type === "cash").reduce((sum, account) => sum + account.balance, 0);
-  const personalAvailable = accounts.filter((account) => account.scope === "personal").reduce((sum, account) => sum + account.balance, 0);
-  const sharedAvailable = accounts.filter((account) => account.scope === "shared").reduce((sum, account) => sum + account.balance, 0);
-  const actualIncome = transactions.filter((item) => item.kind === "income").reduce((sum, item) => sum + item.amount, 0);
-  const actualExpense = transactions.filter((item) => item.kind === "expense").reduce((sum, item) => sum + item.amount, 0);
-  const plannedIncome = planItems.filter((item) => item.kind === "income").reduce((sum, item) => sum + item.amount, 0);
-  const plannedExpense = planItems.filter((item) => item.kind === "expense").reduce((sum, item) => sum + item.amount, 0);
-  const completedIncome = planItems.filter((item) => item.kind === "income" && item.completed).length;
-  const completedExpense = planItems.filter((item) => item.kind === "expense" && item.completed).length;
+// ─── Tendencia ────────────────────────────────────────────────────────────────
+
+async function buildTrend(auth, monthKey, visibleAccountIds) {
+  const monthKeys = [];
+  const anchor    = new Date(`${monthKey}-01T00:00:00`);
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(anchor);
+    d.setMonth(anchor.getMonth() - i);
+    monthKeys.push(d.toISOString().slice(0, 7));
+  }
+
+  const firstMonth = monthKeys[0];
+
+  // Traemos transacciones en el rango y filtramos en memoria por cuentas visibles
+  const snap = await db.collection("transactions")
+    .where("householdId", "==", auth.household.id)
+    .where("monthKey",    ">=", firstMonth)
+    .where("monthKey",    "<=", monthKey)
+    .get();
+
+  const map = new Map(monthKeys.map((k) => [k, { income: 0, expense: 0 }]));
+
+  snap.docs.forEach((doc) => {
+    const t   = doc.data();
+    const row = map.get(t.monthKey);
+    if (!row || !visibleAccountIds.has(t.accountId)) return;
+    if (t.kind === "income") row.income += t.amount;
+    else                     row.expense += t.amount;
+  });
+
+  return monthKeys.map((key) => {
+    const row   = map.get(key);
+    const label = new Intl.DateTimeFormat("es-CO", { month: "short" })
+      .format(new Date(`${key}-01T00:00:00`))
+      .replace(".", "");
+    return { monthKey: key, label, income: row.income, expense: row.expense, net: row.income - row.expense };
+  });
+}
+
+// ─── Auto-expansión de plantillas mensuales ───────────────────────────────────
+
+async function ensurePlanItemsForMonth(householdId, monthKey) {
+  const [templatesSnap, existingSnap] = await Promise.all([
+    db.collection("planTemplates")
+      .where("householdId", "==", householdId)
+      .where("active",      "==", true)
+      .get(),
+    db.collection("planItems")
+      .where("householdId", "==", householdId)
+      .where("monthKey",    "==", monthKey)
+      .get()
+  ]);
+
+  if (templatesSnap.empty) return;
+
+  const existingTemplateIds = new Set(
+    existingSnap.docs.map((d) => d.data().templateId).filter(Boolean)
+  );
+
+  const toCreate = templatesSnap.docs.filter((d) => !existingTemplateIds.has(d.id));
+  if (!toCreate.length) return;
+
+  const batch     = db.batch();
+  const createdAt = nowIso();
+
+  toCreate.forEach((templateDoc) => {
+    const t = templateDoc.data();
+    batch.set(db.collection("planItems").doc(crypto.randomUUID()), {
+      householdId,
+      ownerUserId:             t.ownerUserId,
+      templateId:              templateDoc.id,
+      kind:                    t.kind,
+      title:                   t.title,
+      category:                t.category,
+      amount:                  t.amount,
+      dueDay:                  t.dueDay,
+      monthKey,
+      completedTransactionId:  null,
+      completedAt:             null,
+      createdAt
+    });
+  });
+
+  await batch.commit();
+}
+
+// ─── Resumen ──────────────────────────────────────────────────────────────────
+
+function summarize(accounts, transactions, planItems, trend) {
+  const availableTotal  = accounts.reduce((s, a) => s + a.balance, 0);
+  const bankTotal       = accounts.filter((a) => a.type === "bank").reduce((s, a) => s + a.balance, 0);
+  const cashTotal       = accounts.filter((a) => a.type === "cash").reduce((s, a) => s + a.balance, 0);
+  const actualIncome    = transactions.filter((t) => t.kind === "income").reduce((s, t) => s + t.amount, 0);
+  const actualExpense   = transactions.filter((t) => t.kind === "expense").reduce((s, t) => s + t.amount, 0);
+  const plannedIncome   = planItems.filter((i) => i.kind === "income").reduce((s, i) => s + i.amount, 0);
+  const plannedExpense  = planItems.filter((i) => i.kind === "expense").reduce((s, i) => s + i.amount, 0);
+  const completedIncome  = planItems.filter((i) => i.kind === "income"  && i.completed).length;
+  const completedExpense = planItems.filter((i) => i.kind === "expense" && i.completed).length;
 
   return {
     availableTotal,
     bankTotal,
     cashTotal,
-    personalAvailable,
-    sharedAvailable,
+    personalAvailable: accounts.filter((a) => a.scope === "personal").reduce((s, a) => s + a.balance, 0),
+    sharedAvailable:   accounts.filter((a) => a.scope === "shared").reduce((s, a) => s + a.balance, 0),
     actualIncome,
     actualExpense,
     plannedIncome,
     plannedExpense,
-    idealBudget: plannedIncome - plannedExpense,
-    realizedBudget: actualIncome - actualExpense,
-    pendingItems: planItems.filter((item) => !item.completed).length,
+    idealBudget:    plannedIncome  - plannedExpense,
+    realizedBudget: actualIncome   - actualExpense,
+    pendingItems:   planItems.filter((i) => !i.completed).length,
     completedIncome,
     completedExpense,
-    trend: buildTrend(auth, monthKey)
+    trend
   };
 }
 
+// ─── Analítica ────────────────────────────────────────────────────────────────
+
 function buildAnalytics(accounts, transactions, planItems, monthKey) {
   const scopes = ["personal", "shared"].map((scope) => {
-    const scopedTransactions = transactions.filter((transaction) => transaction.scope === scope);
-    const scopedPlan = planItems.filter((item) => item.scope === scope);
-    const scopedAccounts = accounts.filter((account) => account.scope === scope);
-
+    const tx  = transactions.filter((t) => t.scope === scope);
+    const pl  = planItems.filter((i) => i.scope === scope);
+    const acc = accounts.filter((a) => a.scope === scope);
     return {
       scope,
-      label: scope === "personal" ? "Mi espacio" : "Compartido",
-      income: scopedTransactions.filter((item) => item.kind === "income").reduce((sum, item) => sum + item.amount, 0),
-      expense: scopedTransactions.filter((item) => item.kind === "expense").reduce((sum, item) => sum + item.amount, 0),
-      plannedIncome: scopedPlan.filter((item) => item.kind === "income").reduce((sum, item) => sum + item.amount, 0),
-      plannedExpense: scopedPlan.filter((item) => item.kind === "expense").reduce((sum, item) => sum + item.amount, 0),
-      available: scopedAccounts.reduce((sum, account) => sum + account.balance, 0),
-      completedItems: scopedPlan.filter((item) => item.completed).length,
-      totalItems: scopedPlan.length
+      label:          scope === "personal" ? "Mi espacio" : "Compartido",
+      income:         tx.filter((t) => t.kind === "income").reduce((s, t) => s + t.amount, 0),
+      expense:        tx.filter((t) => t.kind === "expense").reduce((s, t) => s + t.amount, 0),
+      plannedIncome:  pl.filter((i) => i.kind === "income").reduce((s, i) => s + i.amount, 0),
+      plannedExpense: pl.filter((i) => i.kind === "expense").reduce((s, i) => s + i.amount, 0),
+      available:      acc.reduce((s, a) => s + a.balance, 0),
+      completedItems: pl.filter((i) => i.completed).length,
+      totalItems:     pl.length
     };
   });
 
@@ -886,8 +941,8 @@ function buildAnalytics(accounts, transactions, planItems, monthKey) {
     scopes,
     categoryBreakdowns: {
       personal: buildCategoryBreakdown(transactions, "personal"),
-      shared: buildCategoryBreakdown(transactions, "shared"),
-      all: buildCategoryBreakdown(transactions, "all")
+      shared:   buildCategoryBreakdown(transactions, "shared"),
+      all:      buildCategoryBreakdown(transactions, "all")
     },
     weeklyExpenses: buildWeeklyExpenses(transactions, monthKey),
     holdingsByType: buildHoldingsByType(accounts)
@@ -895,352 +950,203 @@ function buildAnalytics(accounts, transactions, planItems, monthKey) {
 }
 
 function buildCategoryBreakdown(transactions, scope) {
-  const filtered = transactions.filter((transaction) => {
-    return transaction.kind === "expense" && (scope === "all" || transaction.scope === scope);
-  });
-
+  const filtered = transactions.filter(
+    (t) => t.kind === "expense" && (scope === "all" || t.scope === scope)
+  );
   const grouped = new Map();
-  filtered.forEach((transaction) => {
-    grouped.set(transaction.category, (grouped.get(transaction.category) || 0) + transaction.amount);
-  });
-
+  filtered.forEach((t) => grouped.set(t.category, (grouped.get(t.category) || 0) + t.amount));
   const rows = [...grouped.entries()]
     .map(([category, total]) => ({ category, total }))
-    .sort((left, right) => right.total - left.total);
-
-  if (rows.length <= 5) {
-    return rows;
-  }
-
+    .sort((a, b) => b.total - a.total);
+  if (rows.length <= 5) return rows;
   const main = rows.slice(0, 4);
-  const rest = rows.slice(4).reduce((sum, row) => sum + row.total, 0);
+  const rest = rows.slice(4).reduce((s, r) => s + r.total, 0);
   return [...main, { category: "Otros", total: rest }];
 }
 
 function buildWeeklyExpenses(transactions, monthKey) {
-  const date = new Date(`${monthKey}-01T00:00:00`);
+  const date        = new Date(`${monthKey}-01T00:00:00`);
   const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-  const weeks = Math.ceil(daysInMonth / 7);
-  const rows = Array.from({ length: weeks }, (_, index) => ({
-    label: `S${index + 1}`,
-    personal: 0,
-    shared: 0
-  }));
+  const weeks       = Math.ceil(daysInMonth / 7);
+  const rows        = Array.from({ length: weeks }, (_, i) => ({ label: `S${i + 1}`, personal: 0, shared: 0 }));
 
-  transactions.forEach((transaction) => {
-    if (transaction.kind !== "expense") {
-      return;
-    }
-
-    const day = Number(transaction.occurredOn.slice(8, 10));
+  transactions.forEach((t) => {
+    if (t.kind !== "expense") return;
+    const day       = Number(t.occurredOn.slice(8, 10));
     const weekIndex = Math.min(Math.floor((day - 1) / 7), weeks - 1);
-    rows[weekIndex][transaction.scope] += transaction.amount;
+    rows[weekIndex][t.scope] += t.amount;
   });
-
   return rows;
 }
 
 function buildHoldingsByType(accounts) {
   return [
     {
-      label: "Banco",
-      personal: accounts.filter((account) => account.scope === "personal" && account.type === "bank").reduce((sum, account) => sum + account.balance, 0),
-      shared: accounts.filter((account) => account.scope === "shared" && account.type === "bank").reduce((sum, account) => sum + account.balance, 0)
+      label:    "Banco",
+      personal: accounts.filter((a) => a.scope === "personal" && a.type === "bank").reduce((s, a) => s + a.balance, 0),
+      shared:   accounts.filter((a) => a.scope === "shared"   && a.type === "bank").reduce((s, a) => s + a.balance, 0)
     },
     {
-      label: "Efectivo",
-      personal: accounts.filter((account) => account.scope === "personal" && account.type === "cash").reduce((sum, account) => sum + account.balance, 0),
-      shared: accounts.filter((account) => account.scope === "shared" && account.type === "cash").reduce((sum, account) => sum + account.balance, 0)
+      label:    "Efectivo",
+      personal: accounts.filter((a) => a.scope === "personal" && a.type === "cash").reduce((s, a) => s + a.balance, 0),
+      shared:   accounts.filter((a) => a.scope === "shared"   && a.type === "cash").reduce((s, a) => s + a.balance, 0)
     }
   ];
 }
 
-function buildTrend(auth, monthKey) {
-  const monthKeys = [];
-  const anchor = new Date(`${monthKey}-01T00:00:00`);
-  for (let index = 5; index >= 0; index -= 1) {
-    const current = new Date(anchor);
-    current.setMonth(anchor.getMonth() - index);
-    monthKeys.push(current.toISOString().slice(0, 7));
-  }
+// ─── requireAuth ──────────────────────────────────────────────────────────────
 
-  const firstMonth = monthKeys[0];
-  const rows = db.prepare(`
-    SELECT
-      substr(t.occurred_on, 1, 7) AS monthKey,
-      SUM(CASE WHEN t.kind = 'income' THEN t.amount ELSE 0 END) AS income,
-      SUM(CASE WHEN t.kind = 'expense' THEN t.amount ELSE 0 END) AS expense
-    FROM transactions t
-    INNER JOIN accounts a ON a.id = t.account_id
-    WHERE
-      t.household_id = :householdId
-      AND (a.owner_user_id IS NULL OR a.owner_user_id = :userId)
-      AND substr(t.occurred_on, 1, 7) >= :firstMonth
-      AND substr(t.occurred_on, 1, 7) <= :lastMonth
-    GROUP BY substr(t.occurred_on, 1, 7)
-  `).all({
-    householdId: auth.household.id,
-    userId: auth.user.id,
-    firstMonth,
-    lastMonth: monthKey
-  });
+async function requireAuth(req) {
+  const cookies = parseCookies(req.headers.cookie || "");
+  if (!cookies.sid) throw createHttpError(401, "Sesion requerida.");
 
-  const map = new Map(rows.map((row) => [row.monthKey, row]));
-  return monthKeys.map((key) => {
-    const row = map.get(key) || { income: 0, expense: 0 };
-    const label = new Intl.DateTimeFormat("es-CO", { month: "short" })
-      .format(new Date(`${key}-01T00:00:00`))
-      .replace(".", "");
+  const sessionDoc = await db.collection("sessions").doc(cookies.sid).get();
+  if (!sessionDoc.exists) throw createHttpError(401, "Sesion expirada.");
 
-    return {
-      monthKey: key,
-      label,
-      income: row.income,
-      expense: row.expense,
-      net: row.income - row.expense
-    };
-  });
-}
-
-function ensurePlanItemsForMonth(householdId, monthKey) {
-  const existingTemplateIds = new Set(db.prepare(`
-    SELECT template_id AS templateId
-    FROM plan_items
-    WHERE household_id = :householdId AND month_key = :monthKey AND template_id IS NOT NULL
-  `).all({
-    householdId,
-    monthKey
-  }).map((row) => row.templateId));
-
-  const templates = db.prepare(`
-    SELECT
-      id,
-      owner_user_id AS ownerUserId,
-      kind,
-      title,
-      category,
-      amount,
-      due_day AS dueDay
-    FROM plan_templates
-    WHERE household_id = :householdId AND active = 1
-  `).all({ householdId });
-
-  templates.forEach((template) => {
-    if (existingTemplateIds.has(template.id)) {
-      return;
-    }
-
-    db.prepare(`
-      INSERT INTO plan_items (
-        id, household_id, owner_user_id, template_id, kind, title, category, amount, due_day, month_key, created_at
-      )
-      VALUES (
-        :id, :householdId, :ownerUserId, :templateId, :kind, :title, :category, :amount, :dueDay, :monthKey, :createdAt
-      )
-    `).run({
-      id: crypto.randomUUID(),
-      householdId,
-      ownerUserId: template.ownerUserId,
-      templateId: template.id,
-      kind: template.kind,
-      title: template.title,
-      category: template.category,
-      amount: template.amount,
-      dueDay: template.dueDay,
-      monthKey,
-      createdAt: nowIso()
-    });
-  });
-}
-
-function getVisibleAccount(auth, accountId) {
-  return db.prepare(`
-    SELECT id, owner_user_id AS ownerUserId
-    FROM accounts
-    WHERE
-      id = :accountId
-      AND household_id = :householdId
-      AND (owner_user_id IS NULL OR owner_user_id = :userId)
-  `).get({
-    accountId,
-    householdId: auth.household.id,
-    userId: auth.user.id
-  });
-}
-
-function getVisiblePlanItem(auth, planItemId) {
-  return db.prepare(`
-    SELECT id, owner_user_id AS ownerUserId, kind, month_key AS monthKey, completed_transaction_id AS completedTransactionId
-    FROM plan_items
-    WHERE
-      id = :planItemId
-      AND household_id = :householdId
-      AND (owner_user_id IS NULL OR owner_user_id = :userId)
-  `).get({
-    planItemId,
-    householdId: auth.household.id,
-    userId: auth.user.id
-  });
-}
-
-function requireAuth(request) {
-  cleanupExpiredSessions();
-  const cookies = parseCookies(request.headers.cookie || "");
-
-  if (!cookies.sid) {
-    throw createHttpError(401, "Sesion requerida.");
-  }
-
-  const auth = db.prepare(`
-    SELECT
-      sessions.id AS sessionId,
-      users.id AS userId,
-      users.name AS userName,
-      users.email AS userEmail,
-      users.avatar_data_url AS avatarDataUrl,
-      households.id AS householdId,
-      households.name AS householdName,
-      households.currency AS householdCurrency,
-      households.invite_code AS inviteCode
-    FROM sessions
-    INNER JOIN users ON users.id = sessions.user_id
-    INNER JOIN memberships ON memberships.user_id = users.id
-    INNER JOIN households ON households.id = memberships.household_id
-    WHERE sessions.id = :sid AND sessions.expires_at > :now
-  `).get({
-    sid: cookies.sid,
-    now: nowIso()
-  });
-
-  if (!auth) {
+  const session = sessionDoc.data();
+  if (session.expiresAt <= nowIso()) {
+    await sessionDoc.ref.delete();
     throw createHttpError(401, "Sesion expirada.");
   }
 
+  // Leer usuario y membresía en paralelo
+  const [userDoc, membershipSnap] = await Promise.all([
+    db.collection("users").doc(session.userId).get(),
+    db.collection("memberships").where("userId", "==", session.userId).limit(1).get()
+  ]);
+
+  if (!userDoc.exists)      throw createHttpError(401, "Usuario no encontrado.");
+  if (membershipSnap.empty) throw createHttpError(401, "Sin hogar asociado.");
+
+  const householdDoc = await db.collection("households")
+    .doc(membershipSnap.docs[0].data().householdId)
+    .get();
+  if (!householdDoc.exists) throw createHttpError(401, "Hogar no encontrado.");
+
+  const u = userDoc.data();
+  const h = householdDoc.data();
+
   return {
     user: {
-      id: auth.userId,
-      name: auth.userName,
-      email: auth.userEmail,
-      avatarDataUrl: auth.avatarDataUrl
+      id:           userDoc.id,
+      name:         u.name,
+      email:        u.email,
+      avatarDataUrl: u.avatarDataUrl
     },
     household: {
-      id: auth.householdId,
-      name: auth.householdName,
-      currency: auth.householdCurrency,
-      inviteCode: auth.inviteCode
+      id:         householdDoc.id,
+      name:       h.name,
+      currency:   h.currency,
+      inviteCode: h.inviteCode
     }
   };
 }
 
-function createSession(response, userId) {
+// ─── Sesión ───────────────────────────────────────────────────────────────────
+
+async function createSession(res, userId) {
   const sessionId = crypto.randomBytes(32).toString("hex");
   const createdAt = nowIso();
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  db.prepare(`
-    INSERT INTO sessions (id, user_id, expires_at, created_at)
-    VALUES (:id, :userId, :expiresAt, :createdAt)
-  `).run({
-    id: sessionId,
-    userId,
-    expiresAt,
-    createdAt
-  });
-
-  response.setHeader("Set-Cookie", buildSessionCookie(sessionId));
+  await db.collection("sessions").doc(sessionId).set({ userId, expiresAt, createdAt });
+  res.setHeader("Set-Cookie", buildSessionCookie(sessionId));
 }
 
-function serveStatic(response, pathname) {
-  const safePath = pathname === "/" ? "/index.html" : pathname;
-  const resolvedPath = path.normalize(path.join(ROOT, safePath));
+// ─── Archivos estáticos ───────────────────────────────────────────────────────
 
-  if (!resolvedPath.startsWith(ROOT)) {
-    respondText(response, 403, "Acceso denegado.");
+function serveStatic(res, pathname) {
+  const safePath     = pathname === "/" ? "/index.html" : pathname;
+  const resolvedPath = path.resolve(ROOT, `.${safePath}`);
+  if (resolvedPath !== ROOT && !resolvedPath.startsWith(`${ROOT}${path.sep}`)) {
+    respondText(res, 403, "Acceso denegado.");
     return;
   }
 
-  fs.readFile(resolvedPath, (error, content) => {
-    if (error) {
-      respondText(response, 404, "No encontrado.");
+  fs.readFile(resolvedPath, (err, content) => {
+    if (err) { respondText(res, 404, "No encontrado."); return; }
+    res.writeHead(200, { "Content-Type": MIME_TYPES[path.extname(resolvedPath)] || "application/octet-stream" });
+    res.end(content);
+  });
+}
+
+// ─── HTTP helpers ─────────────────────────────────────────────────────────────
+
+function respondJson(res, status, payload, extraHeaders = {}) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", ...extraHeaders });
+  res.end(JSON.stringify(payload));
+}
+
+function respondText(res, status, message) {
+  res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end(message);
+}
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  const raw = fs.readFileSync(filePath, "utf-8");
+  raw.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
       return;
     }
 
-    response.writeHead(200, {
-      "Content-Type": MIME_TYPES[path.extname(resolvedPath)] || "application/octet-stream"
-    });
-    response.end(content);
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) {
+      return;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    if (!key || process.env[key] !== undefined) {
+      return;
+    }
+
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] = value;
   });
 }
 
-function respondJson(response, statusCode, payload, extraHeaders = {}) {
-  response.writeHead(statusCode, {
-    "Content-Type": "application/json; charset=utf-8",
-    ...extraHeaders
-  });
-  response.end(JSON.stringify(payload));
-}
-
-function respondText(response, statusCode, message) {
-  response.writeHead(statusCode, {
-    "Content-Type": "text/plain; charset=utf-8"
-  });
-  response.end(message);
-}
-
-async function readJsonBody(request) {
+async function readJsonBody(req) {
   const chunks = [];
-  for await (const chunk of request) {
-    chunks.push(chunk);
-  }
-
-  if (!chunks.length) {
-    return {};
-  }
-
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-  } catch {
-    throw createHttpError(400, "JSON invalido.");
-  }
+  for await (const chunk of req) chunks.push(chunk);
+  if (!chunks.length) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf-8")); }
+  catch { throw createHttpError(400, "JSON invalido."); }
 }
 
-function parseCookies(cookieHeader) {
-  return cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .reduce((accumulator, part) => {
-      const index = part.indexOf("=");
-      const key = index >= 0 ? part.slice(0, index) : part;
-      const value = index >= 0 ? part.slice(index + 1) : "";
-      accumulator[key] = decodeURIComponent(value);
-      return accumulator;
-    }, {});
+// ─── Cookies ──────────────────────────────────────────────────────────────────
+
+function parseCookies(header) {
+  return header.split(";").map((p) => p.trim()).filter(Boolean).reduce((acc, part) => {
+    const i = part.indexOf("=");
+    acc[i >= 0 ? part.slice(0, i) : part] = i >= 0 ? decodeURIComponent(part.slice(i + 1)) : "";
+    return acc;
+  }, {});
 }
 
 function buildSessionCookie(sessionId) {
-  const parts = [
-    `sid=${sessionId}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    `Max-Age=${SESSION_DAYS * 24 * 60 * 60}`
-  ];
-
-  if (process.env.NODE_ENV === "production") {
-    parts.push("Secure");
-  }
-
+  const parts = [`sid=${sessionId}`, "Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${SESSION_DAYS * 24 * 3600}`];
+  if (process.env.NODE_ENV === "production") parts.push("Secure");
   return parts.join("; ");
 }
 
 function expiredCookie() {
   const parts = ["sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"];
-  if (process.env.NODE_ENV === "production") {
-    parts.push("Secure");
-  }
+  if (process.env.NODE_ENV === "production") parts.push("Secure");
   return parts.join("; ");
 }
+
+// ─── Contraseñas ──────────────────────────────────────────────────────────────
 
 function createPasswordRecord(password) {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -1249,110 +1155,174 @@ function createPasswordRecord(password) {
 }
 
 function verifyPassword(password, salt, hash) {
-  const attempt = crypto.scryptSync(password, salt, 64);
+  const attempt  = crypto.scryptSync(password, salt, 64);
   const expected = Buffer.from(hash, "hex");
   return attempt.length === expected.length && crypto.timingSafeEqual(attempt, expected);
 }
 
+// ─── Validaciones ─────────────────────────────────────────────────────────────
+
 function sanitizeAvatarDataUrl(value) {
   const text = `${value ?? ""}`.trim();
-  if (!text) {
-    return "";
-  }
-
-  const isImage = /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(text);
-  if (!isImage || text.length > MAX_AVATAR_DATA_URL_LENGTH) {
+  if (!text) return "";
+  if (!/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(text) || text.length > MAX_AVATAR_DATA_URL_LEN) {
     throw createHttpError(400, "La foto de perfil no es valida.");
   }
-
   return text;
 }
 
 function requireText(value, min, max, message) {
   const text = `${value ?? ""}`.trim();
-  if (text.length < min || text.length > max) {
-    throw createHttpError(400, message);
-  }
+  if (text.length < min || text.length > max) throw createHttpError(400, message);
   return text;
 }
 
 function optionalText(value, min, max) {
   const text = `${value ?? ""}`.trim();
-  if (!text) {
-    return "";
-  }
-  if (text.length < min || text.length > max) {
-    throw createHttpError(400, "Texto invalido.");
-  }
+  if (!text) return "";
+  if (text.length < min || text.length > max) throw createHttpError(400, "Texto invalido.");
   return text;
 }
 
 function normalizeEmail(value) {
   const email = `${value ?? ""}`.trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw createHttpError(400, "Email invalido.");
-  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw createHttpError(400, "Email invalido.");
   return email;
 }
 
 function requirePassword(value, silentAuthFailure = false) {
   const password = `${value ?? ""}`;
-  if (password.length < 8) {
-    throw createHttpError(silentAuthFailure ? 401 : 400, "La contrasena debe tener al menos 8 caracteres.");
-  }
+  if (password.length < 8) throw createHttpError(silentAuthFailure ? 401 : 400, "La contrasena debe tener al menos 8 caracteres.");
   return password;
 }
 
 function requireOneOf(value, allowed, message) {
-  if (!allowed.includes(value)) {
-    throw createHttpError(400, message);
-  }
+  if (!allowed.includes(value)) throw createHttpError(400, message);
   return value;
 }
 
 function requireMoney(value, message) {
   const amount = Number(value);
-  if (!Number.isFinite(amount) || amount < 0) {
-    throw createHttpError(400, message);
-  }
+  if (!Number.isFinite(amount) || amount < 0) throw createHttpError(400, message);
   return Math.round(amount);
 }
 
 function requireDay(value) {
   const day = Number(value);
-  if (!Number.isInteger(day) || day < 1 || day > 31) {
-    throw createHttpError(400, "Dia invalido.");
-  }
+  if (!Number.isInteger(day) || day < 1 || day > 31) throw createHttpError(400, "Dia invalido.");
   return day;
 }
 
 function requireDate(value, message) {
   const date = `${value ?? ""}`.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    throw createHttpError(400, message);
-  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw createHttpError(400, message);
   return date;
 }
 
 function parseMonthKey(value) {
   const monthKey = `${value ?? ""}`.trim();
-  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
-    throw createHttpError(400, "Mes invalido.");
-  }
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) throw createHttpError(400, "Mes invalido.");
   return monthKey;
 }
 
-function createInviteCodeUnique() {
-  while (true) {
-    const inviteCode = crypto.randomBytes(4).toString("hex").toUpperCase();
-    const exists = db.prepare(`
-      SELECT id
-      FROM households
-      WHERE invite_code = :inviteCode
-    `).get({ inviteCode });
-    if (!exists) {
-      return inviteCode;
+// ─── Utilidades ───────────────────────────────────────────────────────────────
+
+async function getVisibleAccountContext(txn, auth, accountId) {
+  const doc = await txn.get(db.collection("accounts").doc(accountId));
+  if (!doc.exists) throw createHttpError(404, "No puedes usar esa cuenta.");
+
+  const data = doc.data();
+  if (data.householdId !== auth.household.id) throw createHttpError(404, "No puedes usar esa cuenta.");
+  if (data.ownerUserId !== null && data.ownerUserId !== auth.user.id) {
+    throw createHttpError(404, "No puedes usar esa cuenta.");
+  }
+
+  return { doc, data };
+}
+
+async function getVisiblePlanItemContext(txn, auth, planItemId) {
+  const doc = await txn.get(db.collection("planItems").doc(planItemId));
+  if (!doc.exists) throw createHttpError(404, "Ese item del plan no existe.");
+
+  const data = doc.data();
+  if (data.householdId !== auth.household.id) throw createHttpError(404, "Ese item del plan no existe.");
+  if (data.ownerUserId !== null && data.ownerUserId !== auth.user.id) {
+    throw createHttpError(404, "Ese item del plan no existe.");
+  }
+
+  return { doc, data };
+}
+
+async function getTransactionEditContext(txn, auth, transactionId) {
+  const transactionDoc = await txn.get(db.collection("transactions").doc(transactionId));
+  if (!transactionDoc.exists) throw createHttpError(404, "Ese movimiento no existe.");
+
+  const transaction = transactionDoc.data();
+  if (transaction.householdId !== auth.household.id) throw createHttpError(404, "Ese movimiento no existe.");
+
+  const accountContext = await getVisibleAccountContext(txn, auth, transaction.accountId);
+
+  let planItemContext = null;
+  if (transaction.planItemId) {
+    const doc = await txn.get(db.collection("planItems").doc(transaction.planItemId));
+    if (doc.exists) {
+      planItemContext = { doc, data: doc.data() };
     }
+  }
+
+  return { transactionDoc, transaction, accountContext, planItemContext };
+}
+
+function validatePlanItemForTransaction(item, auth, kind, monthKey, accountScope, currentTransactionId = "") {
+  if (item.householdId !== auth.household.id) throw createHttpError(404, "Ese item del plan no existe.");
+  if (item.ownerUserId !== null && item.ownerUserId !== auth.user.id) {
+    throw createHttpError(404, "Ese item del plan no existe.");
+  }
+  if (item.kind !== kind) {
+    throw createHttpError(400, "El item del plan no coincide con el tipo de movimiento.");
+  }
+  if (item.monthKey !== monthKey) {
+    throw createHttpError(400, "La fecha debe pertenecer al mismo mes del item.");
+  }
+  if (getAccountScope(item) !== accountScope) {
+    throw createHttpError(400, "El item del plan y la cuenta deben estar en el mismo espacio.");
+  }
+  if (item.completedTransactionId && item.completedTransactionId !== currentTransactionId) {
+    throw createHttpError(400, "Ese item del plan ya fue marcado.");
+  }
+}
+
+function getAccountScope(entry) {
+  return entry.ownerUserId === null ? "shared" : "personal";
+}
+
+function movementDelta(kind, amount) {
+  return kind === "income" ? amount : -amount;
+}
+
+async function commitBatchOperations(operations) {
+  const chunkSize = 400;
+  for (let index = 0; index < operations.length; index += chunkSize) {
+    const batch = db.batch();
+    operations.slice(index, index + chunkSize).forEach((operation) => {
+      if (operation.type === "delete") {
+        batch.delete(operation.ref);
+        return;
+      }
+
+      if (operation.type === "update") {
+        batch.update(operation.ref, operation.data);
+      }
+    });
+    await batch.commit();
+  }
+}
+
+async function createInviteCodeUnique() {
+  while (true) {
+    const code = crypto.randomBytes(4).toString("hex").toUpperCase();
+    const snap = await db.collection("households").where("inviteCode", "==", code).limit(1).get();
+    if (snap.empty) return code;
   }
 }
 
@@ -1362,38 +1332,6 @@ function randomResetCode() {
 
 function hashCode(code) {
   return crypto.createHash("sha256").update(code).digest("hex");
-}
-
-function runInTransaction(work) {
-  db.exec("BEGIN");
-  try {
-    const result = work();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
-function cleanupExpiredSessions() {
-  db.prepare(`
-    DELETE FROM sessions
-    WHERE expires_at <= :now
-  `).run({ now: nowIso() });
-
-  db.prepare(`
-    DELETE FROM password_resets
-    WHERE expires_at <= :now OR used_at IS NOT NULL
-  `).run({ now: nowIso() });
-}
-
-function ensureColumn(table, definition) {
-  try {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
-  } catch {
-    // Column already exists or cannot be added; safe to ignore here.
-  }
 }
 
 function nowIso() {
@@ -1406,21 +1344,19 @@ function currentMonthKey() {
 
 function pickColorName(seed) {
   let hash = 0;
-  for (const char of seed) {
-    hash = (hash * 31 + char.charCodeAt(0)) % 4096;
-  }
+  for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) % 4096;
   return ACCOUNT_COLORS[hash % ACCOUNT_COLORS.length];
 }
 
 function createHttpError(status, message) {
-  const error = new Error(message);
-  error.status = status;
-  return error;
+  const err = new Error(message);
+  err.status = status;
+  return err;
 }
 
 function getNetworkUrls(port) {
   return Object.values(os.networkInterfaces())
     .flat()
-    .filter((entry) => entry && entry.family === "IPv4" && !entry.internal)
-    .map((entry) => `http://${entry.address}:${port}`);
+    .filter((e) => e && e.family === "IPv4" && !e.internal)
+    .map((e) => `http://${e.address}:${port}`);
 }

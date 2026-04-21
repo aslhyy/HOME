@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Home | Finanzas en pareja</title>
   <meta name="description" content="App movil para finanzas reales en pareja con privacidad por usuario, entorno compartido, foto de perfil, recuperacion de contraseña y analitica visual.">
-  <meta name="theme-color" content="#efe8ff">
+  <meta name="theme-color" content="#6671c9">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="manifest.webmanifest">
@@ -13,71 +13,51 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="backdrop glow-a"></div>
-  <div class="backdrop glow-b"></div>
-  <div class="backdrop glow-c"></div>
-
   <div class="shell">
     <section id="auth-screen" class="screen">
       <div class="auth-layout">
         <aside class="showcase-panel">
           <div class="brand-badge">
-            <span class="brand-orb"></span>
             <strong>Home</strong>
           </div>
 
-          <p class="eyebrow">Una experiencia suave y clara</p>
-          <h1>Tu dinero personal, el suyo y lo compartido en una sola app elegante.</h1>
-          <p class="showcase-copy">Inspirada en una banca móvil premium, pero hecha para la vida real diaria: presupuesto, cuentas, efectivo, registros y visiones claras del gasto.</p>
-
-          <div class="showcase-stack">
-            <article class="showcase-card showcase-balance">
-              <span>Presupuesto del mes</span>
-              <strong>Visual, privado y compartido</strong>
-              <small>Lo tuyo lo ves solo tú. Lo de pareja solo vive en el espacio común.</small>
-            </article>
-
-            <div class="showcase-visual">
-              <article class="showcase-phone">
-                <div class="wallet-card">
-                  <div>
-                    <p>Balance visible</p>
-                    <strong>$0</strong>
-                  </div>
-                  <div class="wallet-chip">HOME</div>
-                  <div class="wallet-shapes">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                  </div>
-                </div>
-
-                <div class="phone-icons">
-                  <span>Banco</span>
-                  <span>Efectivo</span>
-                  <span>Gastos</span>
-                  <span>Graficas</span>
-                </div>
-
-                <div class="phone-chart-preview">
-                  <div class="mini-curve"></div>
-                  <div class="mini-bars">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                  </div>
-                </div>
-              </article>
-
-              <article class="showcase-floating">
-                <p>Checklist mensual</p>
-                <strong>Arriendo, mercado, servicios</strong>
-                <small>Todo puede marcarse al registrar el movimiento real.</small>
-              </article>
-            </div>
+          <div class="showcase-copy-block">
+            <h1>Finanzas claras para ti y para lo compartido.</h1>
+            <p class="showcase-copy">Una vista simple para presupuesto, cuentas y movimientos del mes, sin mezclar lo personal con lo de pareja.</p>
           </div>
+
+          <article class="showcase-phone">
+            <div class="wallet-card">
+              <div>
+                <p>Balance visible</p>
+                <strong>$0</strong>
+              </div>
+              <div class="wallet-chip">HOME</div>
+              <div class="wallet-shapes">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+
+            <div class="phone-icons">
+              <span>Banco</span>
+              <span>Efectivo</span>
+              <span>Gastos</span>
+              <span>Graficas</span>
+            </div>
+
+            <div class="phone-chart-preview">
+              <div class="mini-curve"></div>
+              <div class="mini-bars">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </article>
         </aside>
 
         <section class="auth-panel">
@@ -317,7 +297,10 @@
                 <p class="eyebrow soft">Bancos y efectivo</p>
                 <h2>Cuentas</h2>
               </div>
-              <button class="primary-btn compact" data-action="open-account-modal" type="button">Agregar cuenta</button>
+              <div class="inline-actions">
+                <button class="primary-btn compact" data-action="open-account-modal" type="button">Agregar cuenta</button>
+                <button class="ghost-btn compact danger" data-action="clear-accounts" type="button">Borrar todas</button>
+              </div>
             </div>
             <div id="accounts-summary" class="insight-list compact"></div>
           </article>
@@ -549,7 +532,7 @@
       <div class="section-head">
         <div>
           <p class="eyebrow soft">Registro diario</p>
-          <h3>Nuevo movimiento</h3>
+          <h3 id="transaction-modal-title">Nuevo movimiento</h3>
         </div>
         <button class="icon-btn" data-action="close-modal" type="button" aria-label="Cerrar">x</button>
       </div>
@@ -586,7 +569,8 @@
           Nota
           <textarea id="transaction-note" name="note" rows="3" maxlength="140" placeholder="Algo util para recordar este registro"></textarea>
         </label>
-        <button class="primary-btn wide" type="submit">Guardar movimiento</button>
+        <button id="transaction-submit-btn" class="primary-btn wide" type="submit">Guardar movimiento</button>
+        <button id="transaction-delete-btn" class="ghost-btn wide danger hidden" data-action="delete-transaction-from-modal" type="button">Eliminar movimiento</button>
       </form>
     </div>
   </section>
@@ -681,6 +665,6 @@
 
   <div id="toast" class="toast hidden" aria-live="polite"></div>
 
-  <script src="app.js" defer></script>
+  <script src="app.js?v=20260419-4" defer></script>
 </body>
 </html>

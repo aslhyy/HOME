@@ -1,12 +1,13 @@
 const AVATAR_MAX_DATA_URL_LENGTH = 450000;
 const AVATAR_SOFT_LIMIT = 320000;
-const CHART_COLORS = ["#8e63ff", "#ff8eaa", "#ffb768", "#7bd9c4", "#6ca9ff", "#c9a1ff"];
+const CHART_COLORS = ["#6671c9", "#7a84d3", "#8e97dd", "#a1aae7", "#b7bef0", "#cfd4f7"];
 
 const state = {
   authMode: "login",
   currentView: "dashboard",
   monthKey: currentMonthKey(),
   bootstrap: null,
+  editingTransactionId: "",
   deferredInstallPrompt: null,
   toastTimer: null,
   avatarDrafts: {
@@ -88,9 +89,12 @@ function cacheNodes() {
     "member-list",
     "modal-backdrop",
     "transaction-modal",
+    "transaction-modal-title",
     "account-modal",
     "plan-modal",
     "transaction-form",
+    "transaction-submit-btn",
+    "transaction-delete-btn",
     "account-form",
     "plan-form",
     "transaction-kind",
@@ -196,8 +200,28 @@ async function onDocumentClick(event) {
     return;
   }
 
+  if (action === "edit-transaction") {
+    openTransactionModal({ transactionId: target.dataset.transactionId || "" });
+    return;
+  }
+
   if (action === "register-plan-item") {
     openTransactionModal({ planItemId: target.dataset.planId || "" });
+    return;
+  }
+
+  if (action === "delete-transaction") {
+    await deleteTransaction(target.dataset.transactionId || "");
+    return;
+  }
+
+  if (action === "delete-transaction-from-modal") {
+    await deleteTransaction(state.editingTransactionId);
+    return;
+  }
+
+  if (action === "clear-accounts") {
+    await clearAccounts();
     return;
   }
 
@@ -263,7 +287,8 @@ function switchAuthMode(mode) {
 
 async function submitLogin(event) {
   event.preventDefault();
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const formData = new FormData(form);
 
   try {
     await request("/api/auth/login", {
@@ -274,7 +299,7 @@ async function submitLogin(event) {
       }
     });
 
-    event.currentTarget.reset();
+    if (form) form.reset();
     await loadBootstrap();
     showToast("Sesion iniciada.");
   } catch (error) {
@@ -284,7 +309,9 @@ async function submitLogin(event) {
 
 async function submitRegister(event) {
   event.preventDefault();
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const email = `${formData.get("email") || ""}`.trim();
   const password = `${formData.get("password") || ""}`;
   const confirmPassword = `${formData.get("confirmPassword") || ""}`;
 
@@ -298,19 +325,25 @@ async function submitRegister(event) {
       method: "POST",
       body: {
         name: formData.get("name"),
-        email: formData.get("email"),
+        email,
         password,
         inviteCode: formData.get("inviteCode"),
         avatarDataUrl: state.avatarDrafts.register || ""
       }
     });
 
-    event.currentTarget.reset();
+    if (form) form.reset();
     state.avatarDrafts.register = "";
     refreshRegisterAvatarPreview();
     await loadBootstrap();
     showToast("Cuenta creada.");
   } catch (error) {
+    if (error.status === 409) {
+      moveToLoginWithEmail(email);
+      showToast("Ese correo ya existe. Entra con tu contrasena o usa Recuperar.");
+      return;
+    }
+
     showToast(error.message);
   }
 }
@@ -346,6 +379,7 @@ async function requestResetCode() {
 
 async function submitRecover(event) {
   event.preventDefault();
+  const form = event.currentTarget;
 
   if (nodes.recoverStep.classList.contains("hidden")) {
     showToast("Primero solicita el codigo temporal.");
@@ -377,7 +411,7 @@ async function submitRecover(event) {
       }
     });
 
-    event.currentTarget.reset();
+    if (form) form.reset();
     setRecoverStepVisible(false);
     nodes.recoverPreviewNote.classList.add("hidden");
     nodes.recoverPreviewNote.textContent = "";
@@ -390,7 +424,8 @@ async function submitRecover(event) {
 
 async function submitSettings(event) {
   event.preventDefault();
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const formData = new FormData(form);
   const body = {
     name: formData.get("name"),
     currency: formData.get("currency")
@@ -417,7 +452,8 @@ async function submitSettings(event) {
 
 async function submitAccount(event) {
   event.preventDefault();
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const formData = new FormData(form);
 
   try {
     await request("/api/accounts", {
@@ -430,7 +466,7 @@ async function submitAccount(event) {
       }
     });
 
-    event.currentTarget.reset();
+    if (form) form.reset();
     closeAllModals();
     await loadBootstrap();
     showToast("Cuenta creada.");
@@ -441,7 +477,8 @@ async function submitAccount(event) {
 
 async function submitPlanItem(event) {
   event.preventDefault();
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const formData = new FormData(form);
 
   try {
     await request("/api/plan-items", {
@@ -458,7 +495,7 @@ async function submitPlanItem(event) {
       }
     });
 
-    event.currentTarget.reset();
+    if (form) form.reset();
     closeAllModals();
     await loadBootstrap();
     showToast("Item del mes guardado.");
@@ -469,12 +506,15 @@ async function submitPlanItem(event) {
 
 async function submitTransaction(event) {
   event.preventDefault();
-  const formData = new FormData(event.currentTarget);
+  const form = event.currentTarget;
+  const formData = new FormData(form);
+  const isEditing = Boolean(state.editingTransactionId);
 
   try {
-    await request("/api/transactions", {
+    await request(isEditing ? "/api/transactions/update" : "/api/transactions", {
       method: "POST",
       body: {
+        transactionId: state.editingTransactionId || "",
         kind: formData.get("kind"),
         accountId: formData.get("accountId"),
         planItemId: formData.get("planItemId") || "",
@@ -485,10 +525,10 @@ async function submitTransaction(event) {
       }
     });
 
-    event.currentTarget.reset();
+    if (form) form.reset();
     closeAllModals();
     await loadBootstrap();
-    showToast("Movimiento guardado.");
+    showToast(isEditing ? "Movimiento actualizado." : "Movimiento guardado.");
   } catch (error) {
     showToast(error.message);
   }
@@ -537,6 +577,53 @@ async function logout() {
   showToast("Sesion cerrada.");
 }
 
+async function deleteTransaction(transactionId) {
+  if (!transactionId) {
+    showToast("No encontramos ese movimiento.");
+    return;
+  }
+
+  const confirmed = window.confirm("Esto eliminara el movimiento y ajustara el saldo de la cuenta. Deseas continuar?");
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await request("/api/transactions/delete", {
+      method: "POST",
+      body: { transactionId }
+    });
+
+    closeAllModals();
+    await loadBootstrap();
+    showToast("Movimiento eliminado.");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function clearAccounts() {
+  const confirmed = window.confirm(
+    "Esto eliminara todas las cuentas del hogar actual y tambien los movimientos ligados a esas cuentas. Deseas continuar?"
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    const payload = await request("/api/accounts/clear", {
+      method: "POST",
+      body: {}
+    });
+
+    closeAllModals();
+    await loadBootstrap();
+    showToast(`Se borraron ${payload.deletedAccounts || 0} cuentas y ${payload.deletedTransactions || 0} movimientos.`);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 async function copyInviteCode() {
   const inviteCode = state.bootstrap?.household?.inviteCode;
   if (!inviteCode) {
@@ -583,6 +670,22 @@ function showAuthScreen() {
 function showAppScreen() {
   nodes.authScreen.classList.add("hidden");
   nodes.appScreen.classList.remove("hidden");
+}
+
+function moveToLoginWithEmail(email) {
+  switchAuthMode("login");
+
+  const loginEmail = nodes.loginForm?.elements?.namedItem("email");
+  const loginPassword = nodes.loginForm?.elements?.namedItem("password");
+  if (loginEmail) {
+    loginEmail.value = email;
+  }
+  if (nodes.recoverEmail) {
+    nodes.recoverEmail.value = email;
+  }
+  if (loginPassword && typeof loginPassword.focus === "function") {
+    loginPassword.focus();
+  }
 }
 
 function renderApp() {
@@ -689,7 +792,8 @@ function renderDashboard() {
   );
 
   renderTransactionList(nodes.dashboardTransactions, transactions.slice(0, 5), {
-    empty: "Todavia no hay movimientos en este mes."
+    empty: "Todavia no hay movimientos en este mes.",
+    interactive: false
   });
 }
 
@@ -758,7 +862,8 @@ function renderTransactions() {
   ].map(renderInsightCard).join("");
 
   renderTransactionList(nodes.transactionList, transactions, {
-    empty: "Este mes aun no tiene registros."
+    empty: "Este mes aun no tiene registros.",
+    interactive: true
   });
 }
 
@@ -945,6 +1050,8 @@ function renderTransactionList(container, items, options) {
     return;
   }
 
+  const interactive = options.interactive !== false;
+
   container.innerHTML = items.map((item) => `
     <article class="transaction-card">
       <header>
@@ -960,7 +1067,15 @@ function renderTransactionList(container, items, options) {
       ${item.note ? `<span>${escapeHtml(item.note)}</span>` : ""}
       <footer>
         <span>${formatDate(item.occurredOn)}</span>
-        <span>${item.planLinked ? "Marco un item del plan" : "Registro libre"}</span>
+        ${interactive
+          ? `
+            <div class="plan-actions">
+              <span>${item.planLinked ? "Marco un item del plan" : "Registro libre"}</span>
+              <button class="ghost-btn compact" data-action="edit-transaction" data-transaction-id="${item.id}" type="button">Editar</button>
+              <button class="ghost-btn compact danger" data-action="delete-transaction" data-transaction-id="${item.id}" type="button">Eliminar</button>
+            </div>
+          `
+          : `<span>${item.planLinked ? "Marco un item del plan" : "Registro libre"}</span>`}
       </footer>
     </article>
   `).join("");
@@ -1065,33 +1180,23 @@ function buildTrendChart(points) {
 
   return `
     <svg class="trend-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Tendencia mensual">
-      <defs>
-        <linearGradient id="trend-area" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stop-color="#8e63ff" stop-opacity="0.34"></stop>
-          <stop offset="100%" stop-color="#ff8eaa" stop-opacity="0.04"></stop>
-        </linearGradient>
-        <linearGradient id="trend-line" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stop-color="#8e63ff"></stop>
-          <stop offset="100%" stop-color="#ff8eaa"></stop>
-        </linearGradient>
-      </defs>
-      <path d="${areaPath}" fill="url(#trend-area)"></path>
-      <path d="${linePath}" fill="none" stroke="url(#trend-line)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="${areaPath}" fill="#6671c9" fill-opacity="0.14"></path>
+      <path d="${linePath}" fill="none" stroke="#6671c9" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
       ${mapped.map((point) => `
         <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="4.8" fill="#ffffff"></circle>
-        <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="2.8" fill="#8e63ff"></circle>
+        <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="2.8" fill="#6671c9"></circle>
       `).join("")}
     </svg>
   `;
 }
 
 function openAccountModal() {
-  nodes.accountForm.reset();
+  if (nodes.accountForm) nodes.accountForm.reset();
   showModal(nodes.accountModal);
 }
 
 function openPlanModal(kind) {
-  nodes.planForm.reset();
+  if (nodes.planForm) nodes.planForm.reset();
   nodes.planKind.value = kind || "expense";
   nodes.planForm.querySelector("input[name='dueDay']").value = `${new Date().getDate()}`;
   showModal(nodes.planModal);
@@ -1103,14 +1208,37 @@ function openTransactionModal(options = {}) {
     return;
   }
 
-  nodes.transactionForm.reset();
+  resetTransactionEditorState();
+
+  if (nodes.transactionForm) nodes.transactionForm.reset();
   nodes.transactionKind.value = options.kind || "expense";
   nodes.transactionDate.value = isCurrentMonth(state.monthKey) ? currentDateIso() : `${state.monthKey}-01`;
 
   let preferredScope = "";
   let preferredPlanId = "";
+  let preferredAccountId = "";
 
-  if (options.planItemId) {
+  if (options.transactionId) {
+    const transaction = state.bootstrap.transactions.find((entry) => entry.id === options.transactionId);
+    if (!transaction) {
+      showToast("No encontramos ese movimiento.");
+      return;
+    }
+
+    state.editingTransactionId = transaction.id;
+    nodes.transactionModalTitle.textContent = "Editar movimiento";
+    nodes.transactionSubmitBtn.textContent = "Guardar cambios";
+    nodes.transactionDeleteBtn.classList.remove("hidden");
+
+    preferredScope = transaction.scope;
+    preferredPlanId = transaction.planItemId || "";
+    preferredAccountId = transaction.accountId || "";
+    nodes.transactionKind.value = transaction.kind;
+    nodes.transactionCategory.value = transaction.category;
+    nodes.transactionAmount.value = `${transaction.amount}`;
+    nodes.transactionDate.value = transaction.occurredOn;
+    nodes.transactionNote.value = transaction.note || "";
+  } else if (options.planItemId) {
     const item = state.bootstrap.planItems.find((entry) => entry.id === options.planItemId);
     if (item) {
       preferredScope = item.scope;
@@ -1121,7 +1249,7 @@ function openTransactionModal(options = {}) {
     }
   }
 
-  populateTransactionAccounts({ preferredScope });
+  populateTransactionAccounts({ preferredScope, preferredAccountId });
   refreshTransactionPlanOptions(preferredPlanId);
   showModal(nodes.transactionModal);
 }
@@ -1136,6 +1264,7 @@ function showModal(modal) {
 }
 
 function closeAllModals() {
+  resetTransactionEditorState();
   nodes.modalBackdrop.classList.add("hidden");
   [nodes.transactionModal, nodes.accountModal, nodes.planModal].forEach((entry) => {
     entry.classList.add("hidden");
@@ -1170,6 +1299,8 @@ function refreshTransactionPlanOptions(preferredId = "") {
     return;
   }
 
+  const preferredPlanId = preferredId || nodes.transactionPlanItem.value || "";
+
   const accounts = state.bootstrap.accounts || [];
   const selectedAccount = accounts.find((account) => account.id === nodes.transactionAccount.value) || accounts[0];
 
@@ -1182,8 +1313,11 @@ function refreshTransactionPlanOptions(preferredId = "") {
   const monthKey = `${nodes.transactionDate.value || `${state.monthKey}-01`}`.slice(0, 7);
 
   const options = state.bootstrap.planItems.filter((item) => {
+    const isPreferred = preferredPlanId && item.id === preferredPlanId;
     return !item.completed
-      && item.kind === selectedKind
+      || isPreferred;
+  }).filter((item) => {
+    return item.kind === selectedKind
       && item.scope === selectedAccount.scope
       && item.monthKey === monthKey;
   });
@@ -1197,9 +1331,16 @@ function refreshTransactionPlanOptions(preferredId = "") {
     `)
   ].join("");
 
-  if (preferredId && options.some((item) => item.id === preferredId)) {
-    nodes.transactionPlanItem.value = preferredId;
+  if (preferredPlanId && options.some((item) => item.id === preferredPlanId)) {
+    nodes.transactionPlanItem.value = preferredPlanId;
   }
+}
+
+function resetTransactionEditorState() {
+  state.editingTransactionId = "";
+  nodes.transactionModalTitle.textContent = "Nuevo movimiento";
+  nodes.transactionSubmitBtn.textContent = "Guardar movimiento";
+  nodes.transactionDeleteBtn.classList.add("hidden");
 }
 
 function refreshRegisterAvatarPreview() {
