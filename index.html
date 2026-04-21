@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Home | Finanzas en pareja</title>
+  <meta name="description" content="App movil para finanzas reales en pareja con privacidad por usuario, entorno compartido, foto de perfil, recuperacion de contraseña y analitica visual.">
+  <meta name="theme-color" content="#efe8ff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="backdrop glow-a"></div>
+  <div class="backdrop glow-b"></div>
+  <div class="backdrop glow-c"></div>
+
+  <div class="shell">
+    <section id="auth-screen" class="screen">
+      <div class="auth-layout">
+        <aside class="showcase-panel">
+          <div class="brand-badge">
+            <span class="brand-orb"></span>
+            <strong>Home</strong>
+          </div>
+
+          <p class="eyebrow">Una experiencia suave y clara</p>
+          <h1>Tu dinero personal, el suyo y lo compartido en una sola app elegante.</h1>
+          <p class="showcase-copy">Inspirada en una banca móvil premium, pero hecha para la vida real diaria: presupuesto, cuentas, efectivo, registros y visiones claras del gasto.</p>
+
+          <div class="showcase-stack">
+            <article class="showcase-card showcase-balance">
+              <span>Presupuesto del mes</span>
+              <strong>Visual, privado y compartido</strong>
+              <small>Lo tuyo lo ves solo tú. Lo de pareja solo vive en el espacio común.</small>
+            </article>
+
+            <div class="showcase-visual">
+              <article class="showcase-phone">
+                <div class="wallet-card">
+                  <div>
+                    <p>Balance visible</p>
+                    <strong>$0</strong>
+                  </div>
+                  <div class="wallet-chip">HOME</div>
+                  <div class="wallet-shapes">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                </div>
+
+                <div class="phone-icons">
+                  <span>Banco</span>
+                  <span>Efectivo</span>
+                  <span>Gastos</span>
+                  <span>Graficas</span>
+                </div>
+
+                <div class="phone-chart-preview">
+                  <div class="mini-curve"></div>
+                  <div class="mini-bars">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="showcase-floating">
+                <p>Checklist mensual</p>
+                <strong>Arriendo, mercado, servicios</strong>
+                <small>Todo puede marcarse al registrar el movimiento real.</small>
+              </article>
+            </div>
+          </div>
+        </aside>
+
+        <section class="auth-panel">
+          <div class="auth-header">
+            <div>
+              <p class="eyebrow soft">Acceso seguro</p>
+              <h2>Empiecen con Home</h2>
+            </div>
+            <div class="auth-tabs">
+              <button class="tab-btn active" data-action="switch-auth" data-mode="login" type="button">Entrar</button>
+              <button class="tab-btn" data-action="switch-auth" data-mode="register" type="button">Crear cuenta</button>
+              <button class="tab-btn" data-action="switch-auth" data-mode="recover" type="button">Recuperar</button>
+            </div>
+          </div>
+
+          <form id="login-form" class="auth-form">
+            <label>
+              Email
+              <input name="email" type="email" placeholder="tu@email.com" autocomplete="email" required>
+            </label>
+            <label>
+              Contrasena
+              <input name="password" type="password" placeholder="Tu contrasena" autocomplete="current-password" required>
+            </label>
+            <div class="auth-actions">
+              <button class="primary-btn wide" type="submit">Entrar a Home</button>
+              <button class="text-btn" data-action="switch-auth" data-mode="recover" type="button">Olvide mi contrasena</button>
+            </div>
+          </form>
+
+          <form id="register-form" class="auth-form hidden">
+            <div class="avatar-editor">
+              <div class="avatar avatar-xl">
+                <img id="register-avatar-preview" class="avatar-image hidden" alt="Foto de perfil">
+                <span id="register-avatar-fallback" class="avatar-fallback">H</span>
+              </div>
+              <div class="avatar-editor-copy">
+                <p class="eyebrow soft">Foto de perfil</p>
+                <div class="inline-actions">
+                  <button class="ghost-btn compact" data-action="pick-register-avatar" type="button">Elegir foto</button>
+                  <button class="ghost-btn compact subtle" data-action="clear-register-avatar" type="button">Quitar</button>
+                </div>
+              </div>
+              <input id="register-avatar-input" type="file" accept="image/*" hidden>
+            </div>
+
+            <label>
+              Nombre
+              <input id="register-name-input" name="name" type="text" maxlength="48" placeholder="Tu nombre" autocomplete="name" required>
+            </label>
+            <label>
+              Email
+              <input name="email" type="email" placeholder="tu@email.com" autocomplete="email" required>
+            </label>
+            <label>
+              Contrasena
+              <input name="password" type="password" minlength="8" placeholder="Minimo 8 caracteres" autocomplete="new-password" required>
+            </label>
+            <label>
+              Confirmar contrasena
+              <input name="confirmPassword" type="password" minlength="8" placeholder="Repite tu contrasena" autocomplete="new-password" required>
+            </label>
+            <label>
+              Codigo de invitacion
+              <input name="inviteCode" type="text" maxlength="12" placeholder="Opcional si tu pareja ya creo Home">
+            </label>
+            <button class="primary-btn wide" type="submit">Crear cuenta</button>
+          </form>
+
+          <form id="recover-form" class="auth-form hidden">
+            <label>
+              Email
+              <input id="recover-email" name="email" type="email" placeholder="tu@email.com" autocomplete="email" required>
+            </label>
+
+            <div class="auth-actions split">
+              <button id="recover-request-btn" class="ghost-btn wide" data-action="request-reset-code" type="button">Enviar codigo</button>
+            </div>
+
+            <div id="recover-step" class="stack hidden">
+              <label>
+                Codigo temporal
+                <input id="recover-code" name="code" type="text" maxlength="12" placeholder="Codigo de recuperacion">
+              </label>
+              <label>
+                Nueva contrasena
+                <input id="recover-password" name="newPassword" type="password" minlength="8" placeholder="Nueva contrasena">
+              </label>
+              <label>
+                Confirmar nueva contrasena
+                <input id="recover-password-confirm" name="confirmPassword" type="password" minlength="8" placeholder="Confirma la nueva contrasena">
+              </label>
+              <button class="primary-btn wide" type="submit">Restablecer contrasena</button>
+            </div>
+
+            <div id="recover-preview-note" class="auth-note hidden"></div>
+          </form>
+
+          <div class="auth-footnote">
+            <p>La recuperación usa un código temporal. En local te lo mostramos en pantalla; al desplegar puedes conectarlo a un proveedor de correo.</p>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="app-screen" class="screen hidden">
+      <header class="app-topbar">
+        <button class="profile-chip" data-action="switch-view" data-view="settings" type="button">
+          <span class="avatar avatar-lg">
+            <img id="header-avatar-preview" class="avatar-image hidden" alt="Foto de perfil">
+            <span id="header-avatar-fallback" class="avatar-fallback">H</span>
+          </span>
+          <span class="profile-chip-copy">
+            <small id="hello-line">Hola</small>
+            <strong id="household-title">Home</strong>
+          </span>
+        </button>
+
+        <div class="topbar-actions">
+          <label class="month-pill">
+            <span>Mes</span>
+            <input id="month-picker" type="month">
+          </label>
+          <button id="install-btn" class="ghost-btn compact hidden" type="button">Instalar</button>
+        </div>
+      </header>
+
+      <main class="app-main">
+        <section id="dashboard-view" class="view active">
+          <article class="hero-card">
+            <div class="hero-card-copy">
+              <p class="eyebrow soft">Vista general</p>
+              <h2 id="dashboard-welcome">Tu dinero en un vistazo</h2>
+              <p id="partner-status" class="support-text">Tu informacion privada sigue siendo solo tuya. Lo compartido lo ven ambos.</p>
+            </div>
+
+            <div class="hero-card-grid">
+              <div class="balance-card">
+                <span>Disponible visible</span>
+                <strong id="available-total">$0</strong>
+                <small id="invite-code-pill">Codigo ----</small>
+              </div>
+              <div class="mini-card">
+                <span>Presupuesto del mes</span>
+                <strong id="ideal-budget-total">$0</strong>
+              </div>
+              <div class="mini-card">
+                <span>En bancos</span>
+                <strong id="bank-total">$0</strong>
+              </div>
+              <div class="mini-card">
+                <span>En efectivo</span>
+                <strong id="cash-total">$0</strong>
+              </div>
+            </div>
+
+            <div class="action-row">
+              <button class="soft-btn" data-action="open-transaction-modal" data-kind="expense" type="button">Nuevo gasto</button>
+              <button class="soft-btn" data-action="open-transaction-modal" data-kind="income" type="button">Nuevo ingreso</button>
+              <button class="soft-btn" data-action="open-account-modal" type="button">Nueva cuenta</button>
+              <button class="soft-btn" data-action="copy-invite" type="button">Copiar codigo</button>
+            </div>
+          </article>
+
+          <section class="panel-grid">
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Tendencia</p>
+                  <h3>Resultado en seis meses</h3>
+                </div>
+              </div>
+              <div id="trend-chart" class="trend-chart"></div>
+              <div id="trend-labels" class="trend-labels"></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Espacios visibles</p>
+                  <h3>Tu radar</h3>
+                </div>
+              </div>
+              <div id="dashboard-scope-cards" class="scope-card-grid"></div>
+            </article>
+          </section>
+
+          <section class="panel-grid">
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Resumen rapido</p>
+                  <h3>Cuentas visibles</h3>
+                </div>
+              </div>
+              <div id="dashboard-account-preview" class="stack-list"></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Pulso del mes</p>
+                  <h3>Metricas clave</h3>
+                </div>
+              </div>
+              <div id="dashboard-insights" class="insight-list"></div>
+            </article>
+          </section>
+
+          <section class="panel-grid">
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Pendientes</p>
+                  <h3>Plan mensual</h3>
+                </div>
+              </div>
+              <div id="dashboard-plan-preview" class="stack-list"></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Actividad</p>
+                  <h3>Movimientos recientes</h3>
+                </div>
+              </div>
+              <div id="dashboard-transactions" class="stack-list"></div>
+            </article>
+          </section>
+        </section>
+
+        <section id="accounts-view" class="view">
+          <article class="feature-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow soft">Bancos y efectivo</p>
+                <h2>Cuentas</h2>
+              </div>
+              <button class="primary-btn compact" data-action="open-account-modal" type="button">Agregar cuenta</button>
+            </div>
+            <div id="accounts-summary" class="insight-list compact"></div>
+          </article>
+
+          <section class="panel-grid">
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Clasificacion</p>
+                  <h3>Cuentas bancarias</h3>
+                </div>
+              </div>
+              <div id="bank-accounts" class="stack-list"></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Clasificacion</p>
+                  <h3>Efectivo</h3>
+                </div>
+              </div>
+              <div id="cash-accounts" class="stack-list"></div>
+            </article>
+          </section>
+        </section>
+
+        <section id="transactions-view" class="view">
+          <article class="feature-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow soft">Registro diario</p>
+                <h2>Movimientos</h2>
+              </div>
+              <button class="primary-btn compact" data-action="open-transaction-modal" data-kind="expense" type="button">Registrar</button>
+            </div>
+            <div id="transaction-summary" class="insight-list compact"></div>
+          </article>
+
+          <article class="feature-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow soft">Historial</p>
+                <h3>Este mes</h3>
+              </div>
+            </div>
+            <div id="transaction-list" class="stack-list"></div>
+          </article>
+        </section>
+
+        <section id="analytics-view" class="view">
+          <article class="feature-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow soft">Analitica</p>
+                <h2>Vision de gastos</h2>
+              </div>
+              <button class="primary-btn compact" data-action="open-plan-modal" data-kind="expense" type="button">Agregar al plan</button>
+            </div>
+            <div id="analytics-scope-cards" class="scope-card-grid"></div>
+          </article>
+
+          <section class="panel-grid">
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Mi espacio</p>
+                  <h3>Gastos por categoria</h3>
+                </div>
+              </div>
+              <div id="personal-category-chart" class="donut-slot"></div>
+              <div id="personal-category-legend" class="legend-list"></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Compartido</p>
+                  <h3>Gastos por categoria</h3>
+                </div>
+              </div>
+              <div id="shared-category-chart" class="donut-slot"></div>
+              <div id="shared-category-legend" class="legend-list"></div>
+            </article>
+          </section>
+
+          <article class="feature-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow soft">Comparacion semanal</p>
+                <h3>Gasto personal vs compartido</h3>
+              </div>
+            </div>
+            <div id="weekly-expense-chart" class="bar-chart"></div>
+            <div id="weekly-expense-legend" class="chart-footnote"></div>
+          </article>
+
+          <article class="feature-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow soft">Plan mensual</p>
+                <h3>Presupuesto real</h3>
+              </div>
+              <button class="ghost-btn compact" data-action="open-plan-modal" data-kind="income" type="button">Nuevo item</button>
+            </div>
+            <div id="plan-summary" class="plan-summary"></div>
+          </article>
+
+          <section class="panel-grid">
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Checklist</p>
+                  <h3>Ingresos del mes</h3>
+                </div>
+              </div>
+              <div id="income-plan-list" class="stack-list"></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Checklist</p>
+                  <h3>Gastos del mes</h3>
+                </div>
+              </div>
+              <div id="expense-plan-list" class="stack-list"></div>
+            </article>
+          </section>
+        </section>
+
+        <section id="settings-view" class="view">
+          <article class="feature-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow soft">Perfil</p>
+                <h2>Ajustes</h2>
+              </div>
+            </div>
+
+            <form id="settings-form" class="settings-form">
+              <div class="avatar-editor">
+                <div class="avatar avatar-xl">
+                  <img id="settings-avatar-preview" class="avatar-image hidden" alt="Foto de perfil">
+                  <span id="settings-avatar-fallback" class="avatar-fallback">H</span>
+                </div>
+                <div class="avatar-editor-copy">
+                  <p class="eyebrow soft">Foto de perfil</p>
+                  <div class="inline-actions">
+                    <button class="ghost-btn compact" data-action="pick-settings-avatar" type="button">Cambiar foto</button>
+                    <button class="ghost-btn compact subtle" data-action="clear-settings-avatar" type="button">Quitar</button>
+                  </div>
+                </div>
+                <input id="settings-avatar-input" type="file" accept="image/*" hidden>
+              </div>
+
+              <div class="settings-grid">
+                <label>
+                  Tu nombre
+                  <input id="settings-name" name="name" type="text" maxlength="48" required>
+                </label>
+                <label>
+                  Moneda
+                  <select id="settings-currency" name="currency">
+                    <option value="COP">COP</option>
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                    <option value="MXN">MXN</option>
+                  </select>
+                </label>
+              </div>
+              <button class="primary-btn wide" type="submit">Guardar cambios</button>
+            </form>
+          </article>
+
+          <section class="panel-grid">
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Pareja</p>
+                  <h3>Codigo de invitacion</h3>
+                </div>
+              </div>
+              <div class="invite-card">
+                <strong id="invite-code-value">------</strong>
+                <p>Tu pareja puede usar este codigo al crear su cuenta para unirse solo al entorno compartido.</p>
+                <button class="ghost-btn compact" data-action="copy-invite" type="button">Copiar codigo</button>
+              </div>
+            </article>
+
+            <article class="feature-card">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow soft">Miembros</p>
+                  <h3>Quienes estan dentro</h3>
+                </div>
+              </div>
+              <div id="member-list" class="stack-list"></div>
+            </article>
+          </section>
+
+          <article class="feature-card">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow soft">Seguridad</p>
+                <h3>Sesion y recuperacion</h3>
+              </div>
+            </div>
+            <p class="support-text">La recuperación de contraseña ya funciona con codigo temporal y queda lista para conectar correo al desplegar.</p>
+            <button class="ghost-btn wide danger" data-action="logout" type="button">Cerrar sesion</button>
+          </article>
+        </section>
+      </main>
+
+      <nav class="bottom-nav" aria-label="Navegacion principal">
+        <button class="nav-btn active" data-action="switch-view" data-view="dashboard" type="button">Inicio</button>
+        <button class="nav-btn" data-action="switch-view" data-view="accounts" type="button">Cuentas</button>
+        <button class="nav-btn" data-action="switch-view" data-view="transactions" type="button">Registro</button>
+        <button class="nav-btn" data-action="switch-view" data-view="analytics" type="button">Analitica</button>
+        <button class="nav-btn" data-action="switch-view" data-view="settings" type="button">Ajustes</button>
+      </nav>
+    </section>
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden"></div>
+
+  <section id="transaction-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-card">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow soft">Registro diario</p>
+          <h3>Nuevo movimiento</h3>
+        </div>
+        <button class="icon-btn" data-action="close-modal" type="button" aria-label="Cerrar">x</button>
+      </div>
+
+      <form id="transaction-form" class="modal-form">
+        <label>
+          Tipo
+          <select id="transaction-kind" name="kind" required>
+            <option value="expense">Gasto</option>
+            <option value="income">Ingreso</option>
+          </select>
+        </label>
+        <label>
+          Cuenta
+          <select id="transaction-account" name="accountId" required></select>
+        </label>
+        <label>
+          Item del plan
+          <select id="transaction-plan-item" name="planItemId"></select>
+        </label>
+        <label>
+          Categoria
+          <input id="transaction-category" name="category" type="text" maxlength="40" placeholder="Mercado, salario, transporte..." required>
+        </label>
+        <label>
+          Valor
+          <input id="transaction-amount" name="amount" type="number" min="0" step="1000" required>
+        </label>
+        <label>
+          Fecha
+          <input id="transaction-date" name="occurredOn" type="date" required>
+        </label>
+        <label>
+          Nota
+          <textarea id="transaction-note" name="note" rows="3" maxlength="140" placeholder="Algo util para recordar este registro"></textarea>
+        </label>
+        <button class="primary-btn wide" type="submit">Guardar movimiento</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="account-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-card">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow soft">Bancos y efectivo</p>
+          <h3>Nueva cuenta</h3>
+        </div>
+        <button class="icon-btn" data-action="close-modal" type="button" aria-label="Cerrar">x</button>
+      </div>
+
+      <form id="account-form" class="modal-form">
+        <label>
+          Nombre de la cuenta
+          <input name="name" type="text" maxlength="40" placeholder="Nequi, Bancolombia, billetera..." required>
+        </label>
+        <label>
+          Tipo
+          <select name="type" required>
+            <option value="bank">Cuenta bancaria</option>
+            <option value="cash">Efectivo</option>
+          </select>
+        </label>
+        <label>
+          Espacio
+          <select name="scope" required>
+            <option value="personal">Mi espacio</option>
+            <option value="shared">Compartido</option>
+          </select>
+        </label>
+        <label>
+          Saldo inicial
+          <input name="openingBalance" type="number" min="0" step="1000" required>
+        </label>
+        <button class="primary-btn wide" type="submit">Crear cuenta</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="plan-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-card">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow soft">Presupuesto del mes</p>
+          <h3>Nuevo item del plan</h3>
+        </div>
+        <button class="icon-btn" data-action="close-modal" type="button" aria-label="Cerrar">x</button>
+      </div>
+
+      <form id="plan-form" class="modal-form">
+        <label>
+          Tipo
+          <select id="plan-kind" name="kind" required>
+            <option value="expense">Gasto</option>
+            <option value="income">Ingreso</option>
+          </select>
+        </label>
+        <label>
+          Nombre
+          <input name="title" type="text" maxlength="48" placeholder="Arriendo, sueldo, mercado..." required>
+        </label>
+        <label>
+          Categoria
+          <input name="category" type="text" maxlength="40" placeholder="Hogar, salario, servicios..." required>
+        </label>
+        <label>
+          Valor esperado
+          <input name="amount" type="number" min="0" step="1000" required>
+        </label>
+        <label>
+          Dia estimado
+          <input name="dueDay" type="number" min="1" max="31" required>
+        </label>
+        <label>
+          Espacio
+          <select name="scope" required>
+            <option value="shared">Compartido</option>
+            <option value="personal">Mi espacio</option>
+          </select>
+        </label>
+        <label class="checkbox-row">
+          <input name="repeatMonthly" type="checkbox">
+          <span>Repetir cada mes como fijo</span>
+        </label>
+        <button class="primary-btn wide" type="submit">Guardar item</button>
+      </form>
+    </div>
+  </section>
+
+  <div id="toast" class="toast hidden" aria-live="polite"></div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
